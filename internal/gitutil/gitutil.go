@@ -44,3 +44,16 @@ func WorktreeAdd(repoDir, path, branch string) error {
 	_, err := run(repoDir, "worktree", "add", path, "-b", branch)
 	return err
 }
+
+// IsClean reports whether the working tree at dir has no uncommitted
+// changes: no staged changes, no unstaged modifications, and no
+// untracked files. It runs `git status --porcelain`, which prints one
+// line per changed/untracked path and nothing at all when the tree is
+// clean.
+func IsClean(dir string) (bool, error) {
+	out, err := run(dir, "status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	return out == "", nil
+}

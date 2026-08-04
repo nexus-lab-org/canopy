@@ -474,6 +474,218 @@ func spawnAndKill(t *testing.T) int {
 	return pid
 }
 
+type statusEntry struct {
+	Path     string `json:"path"`
+	Branch   string `json:"branch"`
+	Holder   string `json:"holder"`
+	Liveness string `json:"liveness"`
+	Clean    bool   `json:"clean"`
+}
+
+func TestStatus(t *testing.T) {
+	t.Run("lists claimed and idle worktrees", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		idlePath := runCanopy(t, dir, "claim", "--holder", "session-b")
+		if idlePath.exitCode != 0 {
+			t.Fatalf("claim failed: %s", idlePath.stderr)
+		}
+		rel := runCanopy(t, dir, "release", "--holder", "session-b")
+		if rel.exitCode != 0 {
+			t.Fatalf("release failed: %s", rel.stderr)
+		}
+
+		res := runCanopy(t, dir, "status")
+		if res.exitCode != 0 {
+			t.Fatalf("status failed: %s", res.stderr)
+		}
+		if !strings.Contains(res.stdout, "session-a") {
+			t.Errorf("expected status output to list claimed holder session-a, got:\n%s", res.stdout)
+		}
+		if !strings.Contains(res.stdout, idlePath.stdout) {
+			t.Errorf("expected status output to list idle worktree path %q, got:\n%s", idlePath.stdout, res.stdout)
+		}
+		// Two data lines plus a header.
+		lines := strings.Split(strings.TrimSpace(res.stdout), "\n")
+		if len(lines) != 3 {
+			t.Errorf("expected header + 2 worktree lines, got %d lines:\n%s", len(lines), res.stdout)
+		}
+	})
+
+	t.Run("a claim held by a live PID reports live", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		// Default PID (this test process's parent) stays alive for the
+		// duration of the test.
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+
+		res := runCanopy(t, dir, "status", "--json")
+		if res.exitCode != 0 {
+			t.Fatalf("status --json failed: %s", res.stderr)
+		}
+		var entries []statusEntry
+		if err := json.Unmarshal([]byte(res.stdout), &entries); err != nil {
+			t.Fatalf("status --json output not valid JSON: %v\noutput: %s", err, res.stdout)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("expected 1 status entry, got %d", len(entries))
+		}
+		if entries[0].Liveness != "live" {
+			t.Errorf("expected liveness=live for a claim held by a running PID, got %q", entries[0].Liveness)
+		}
+	})
+
+	t.Run("a claim whose recorded PID has died reports stale", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		deadPID := spawnAndKill(t)
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a", "--pid", strconv.Itoa(deadPID))
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+
+		res := runCanopy(t, dir, "status", "--json")
+		if res.exitCode != 0 {
+			t.Fatalf("status --json failed: %s", res.stderr)
+		}
+		var entries []statusEntry
+		if err := json.Unmarshal([]byte(res.stdout), &entries); err != nil {
+			t.Fatalf("status --json output not valid JSON: %v\noutput: %s", err, res.stdout)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("expected 1 status entry, got %d", len(entries))
+		}
+		if entries[0].Liveness != "stale" {
+			t.Errorf("expected liveness=stale for a claim whose PID has died, got %q", entries[0].Liveness)
+		}
+	})
+
+	t.Run("an idle (unclaimed) worktree is not reported as live or stale", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		rel := runCanopy(t, dir, "release", "--holder", "session-a")
+		if rel.exitCode != 0 {
+			t.Fatalf("release failed: %s", rel.stderr)
+		}
+
+		res := runCanopy(t, dir, "status", "--json")
+		if res.exitCode != 0 {
+			t.Fatalf("status --json failed: %s", res.stderr)
+		}
+		var entries []statusEntry
+		if err := json.Unmarshal([]byte(res.stdout), &entries); err != nil {
+			t.Fatalf("status --json output not valid JSON: %v\noutput: %s", err, res.stdout)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("expected 1 status entry, got %d", len(entries))
+		}
+		if entries[0].Holder != "" {
+			t.Errorf("expected no holder for an unclaimed worktree, got %q", entries[0].Holder)
+		}
+		if entries[0].Liveness == "live" || entries[0].Liveness == "stale" {
+			t.Errorf("expected an unclaimed worktree to not be reported live/stale, got %q", entries[0].Liveness)
+		}
+	})
+
+	t.Run("clean vs dirty working tree detection", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		wtPath := claimed.stdout
+
+		res := runCanopy(t, dir, "status", "--json")
+		if res.exitCode != 0 {
+			t.Fatalf("status --json failed: %s", res.stderr)
+		}
+		var entries []statusEntry
+		if err := json.Unmarshal([]byte(res.stdout), &entries); err != nil {
+			t.Fatalf("status --json output not valid JSON: %v", err)
+		}
+		if len(entries) != 1 || !entries[0].Clean {
+			t.Fatalf("expected freshly claimed worktree to be clean, got %+v", entries)
+		}
+
+		// Make the working tree dirty.
+		if err := os.WriteFile(filepath.Join(wtPath, "scratch.txt"), []byte("dirty\n"), 0o644); err != nil {
+			t.Fatalf("writing scratch file: %v", err)
+		}
+
+		res2 := runCanopy(t, dir, "status", "--json")
+		if res2.exitCode != 0 {
+			t.Fatalf("status --json failed: %s", res2.stderr)
+		}
+		var entries2 []statusEntry
+		if err := json.Unmarshal([]byte(res2.stdout), &entries2); err != nil {
+			t.Fatalf("status --json output not valid JSON: %v", err)
+		}
+		if len(entries2) != 1 || entries2[0].Clean {
+			t.Fatalf("expected worktree with an untracked file to be dirty, got %+v", entries2)
+		}
+	})
+
+	t.Run("--json output parses as an array with all fields populated", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+
+		res := runCanopy(t, dir, "status", "--json")
+		if res.exitCode != 0 {
+			t.Fatalf("status --json failed: %s", res.stderr)
+		}
+		var entries []statusEntry
+		if err := json.Unmarshal([]byte(res.stdout), &entries); err != nil {
+			t.Fatalf("status --json output not valid JSON: %v\noutput: %s", err, res.stdout)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("expected 1 entry, got %d", len(entries))
+		}
+		e := entries[0]
+		if e.Path == "" || e.Branch == "" || e.Holder != "session-a" || e.Liveness == "" {
+			t.Errorf("expected all fields populated, got %+v", e)
+		}
+	})
+
+	t.Run("empty pool status is an empty list, not an error", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		res := runCanopy(t, dir, "status", "--json")
+		if res.exitCode != 0 {
+			t.Fatalf("status --json failed: %s", res.stderr)
+		}
+		var entries []statusEntry
+		if err := json.Unmarshal([]byte(res.stdout), &entries); err != nil {
+			t.Fatalf("status --json output not valid JSON: %v\noutput: %s", err, res.stdout)
+		}
+		if len(entries) != 0 {
+			t.Errorf("expected empty pool to report 0 status entries, got %d", len(entries))
+		}
+	})
+}
+
 func TestConcurrentClaims(t *testing.T) {
 	dir := newRepo(t)
 	runCanopy(t, dir, "init")

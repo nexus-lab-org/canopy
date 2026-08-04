@@ -142,6 +142,59 @@ func (p *Pool) Claim(holder string, pid int, max int) (*state.Worktree, error) {
 	return claimed, nil
 }
 
+// WorktreeStatus is one worktree's reported status: its identity, who
+// (if anyone) holds it, whether that claim's PID is still alive, and
+// whether the working tree has uncommitted changes.
+type WorktreeStatus struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch"`
+	// Holder is "" when the worktree is unclaimed.
+	Holder string `json:"holder,omitempty"`
+	// Liveness is "live" or "stale" for a claimed worktree, reflecting
+	// whether the claim's recorded PID is still running (per
+	// internal/pool/liveness.go, the same check release --force gates
+	// on). It is "idle" for an unclaimed worktree, where liveness is not
+	// applicable.
+	Liveness string `json:"liveness"`
+	// Clean is true when `git status --porcelain` reports no
+	// uncommitted changes in the worktree.
+	Clean bool `json:"clean"`
+}
+
+// Status reports every worktree in the pool, claimed or not, with its
+// claim holder (if any), PID liveness ("live"/"stale"/"idle"), and
+// working-tree cleanliness.
+func (p *Pool) Status() ([]*WorktreeStatus, error) {
+	s, err := state.Load(p.StatePath)
+	if err != nil {
+		return nil, err
+	}
+
+	statuses := make([]*WorktreeStatus, 0, len(s.Worktrees))
+	for _, wt := range s.Worktrees {
+		st := &WorktreeStatus{
+			Path:     wt.Path,
+			Branch:   wt.Branch,
+			Liveness: "idle",
+		}
+		if wt.Claim != nil {
+			st.Holder = wt.Claim.Holder
+			if isAlive(wt.Claim.PID) {
+				st.Liveness = "live"
+			} else {
+				st.Liveness = "stale"
+			}
+		}
+		clean, err := gitutil.IsClean(wt.Path)
+		if err != nil {
+			return nil, fmt.Errorf("checking git status for %s: %w", wt.Path, err)
+		}
+		st.Clean = clean
+		statuses = append(statuses, st)
+	}
+	return statuses, nil
+}
+
 // uniqueBranch picks "canopy/<holder>", falling back to
 // "canopy/<holder>-2", "-3", ... if that name is already taken by an
 // existing worktree in the pool.
