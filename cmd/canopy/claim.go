@@ -37,7 +37,15 @@ func newClaimCmd() *cobra.Command {
 				effectivePID = os.Getppid()
 			}
 
-			wt, err := p.Claim(holder, effectivePID, max)
+			effectiveMax := max
+			if !cmd.Flags().Changed("max") {
+				// No --max on the command line: fall back to the pool max
+				// configured in repo-level canopy.toml (0 if unconfigured,
+				// same "unlimited" meaning as an explicit --max 0).
+				effectiveMax = p.ConfigMax
+			}
+
+			wt, err := p.Claim(holder, effectivePID, effectiveMax)
 			if err != nil {
 				return err
 			}

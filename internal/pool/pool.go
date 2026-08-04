@@ -8,13 +8,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
+	"github.com/asif/canopy/internal/config"
 	"github.com/asif/canopy/internal/gitutil"
 	"github.com/asif/canopy/internal/state"
 )
+
+// defaultBranchNaming is the branch-name template used when neither
+// repo-level canopy.toml nor any other configuration specifies
+// branch_naming. "{holder}" is replaced with the sanitized holder name.
+const defaultBranchNaming = "canopy/{holder}"
 
 // ErrNoMatchingClaim is returned by Release when the given holder does
 // not currently hold a claim on any worktree in the pool.
@@ -36,10 +44,26 @@ type Pool struct {
 	GitCommonDir string // shared .git dir (same for repo and its worktrees)
 	StatePath    string // path to state.json
 	BaseDir      string // directory new worktrees are created under
+
+	// BranchNaming is the template used for auto-created branch names
+	// (e.g. "canopy/{holder}"), resolved from repo-level canopy.toml or
+	// defaultBranchNaming if unconfigured.
+	BranchNaming string
+	// ConfigMax is the pool max configured in repo-level canopy.toml (0
+	// if unconfigured). Command entry points use this as the fallback
+	// when --max is not passed on the command line.
+	ConfigMax int
+	// Hooks are the post_create/pre_destroy commands configured in
+	// user-level config.toml (both "" if unconfigured or no user config
+	// exists). A hook defined in repo-level canopy.toml is never
+	// surfaced here — see internal/config's package doc.
+	Hooks config.Hooks
 }
 
 // Open resolves a Pool for the repo containing dir (any directory inside
-// the primary repo or one of its worktrees).
+// the primary repo or one of its worktrees), loading its repo-level and
+// user-level configuration (see internal/config) to resolve the pool max,
+// branch-naming scheme, worktree base directory, and hooks.
 func Open(dir string) (*Pool, error) {
 	toplevel, err := gitutil.Toplevel(dir)
 	if err != nil {
@@ -50,16 +74,32 @@ func Open(dir string) (*Pool, error) {
 		return nil, fmt.Errorf("resolving git common dir: %w", err)
 	}
 
+	cfg, err := config.Load(toplevel)
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+
 	// Default worktree base directory: a sibling of the repo root, named
-	// "<repo>-canopy-worktrees". The config ticket makes this
-	// configurable; this is just a sensible default for now.
+	// "<repo>-canopy-worktrees". config.toml's worktree_base_dir
+	// overrides this.
 	base := filepath.Join(filepath.Dir(toplevel), filepath.Base(toplevel)+"-canopy-worktrees")
+	if cfg.WorktreeBaseDir != "" {
+		base = cfg.WorktreeBaseDir
+	}
+
+	branchNaming := defaultBranchNaming
+	if cfg.BranchNaming != "" {
+		branchNaming = cfg.BranchNaming
+	}
 
 	return &Pool{
 		RepoRoot:     toplevel,
 		GitCommonDir: commonDir,
 		StatePath:    state.Path(commonDir),
 		BaseDir:      base,
+		BranchNaming: branchNaming,
+		ConfigMax:    cfg.Max,
+		Hooks:        cfg.Hooks,
 	}, nil
 }
 
@@ -111,7 +151,7 @@ func (p *Pool) Claim(holder string, pid int, max int) (*state.Worktree, error) {
 		}
 
 		// Create a new worktree on a fresh branch.
-		branch := uniqueBranch(s, holder)
+		branch := uniqueBranch(s, holder, p.BranchNaming)
 		name := sanitize(branch)
 		path := filepath.Join(p.BaseDir, name)
 
@@ -139,6 +179,11 @@ func (p *Pool) Claim(holder string, pid int, max int) (*state.Worktree, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if p.Hooks.PostCreate != "" {
+		runHook(p.Hooks.PostCreate, claimed.Path, holder)
+	}
+
 	return claimed, nil
 }
 
@@ -283,11 +328,24 @@ func (p *Pool) Prune(includeUnlanded bool) (*PruneReport, error) {
 	return report, nil
 }
 
-// uniqueBranch picks "canopy/<holder>", falling back to
-// "canopy/<holder>-2", "-3", ... if that name is already taken by an
-// existing worktree in the pool.
-func uniqueBranch(s *state.State, holder string) string {
-	base := "canopy/" + sanitize(holder)
+// uniqueBranch renders template (e.g. "canopy/{holder}") with "{holder}"
+// replaced by the sanitized holder name, falling back to "<rendered>-2",
+// "-3", ... if that name is already taken by an existing worktree in the
+// pool. If template contains no "{holder}" placeholder, the sanitized
+// holder name is appended instead, so auto-created branches never
+// collide across holders regardless of a misconfigured template.
+func uniqueBranch(s *state.State, holder, template string) string {
+	if template == "" {
+		template = defaultBranchNaming
+	}
+	name := sanitize(holder)
+	var base string
+	if strings.Contains(template, "{holder}") {
+		base = strings.ReplaceAll(template, "{holder}", name)
+	} else {
+		base = template + name
+	}
+
 	taken := make(map[string]bool, len(s.Worktrees))
 	for _, wt := range s.Worktrees {
 		taken[wt.Branch] = true
@@ -300,6 +358,27 @@ func uniqueBranch(s *state.State, holder string) string {
 		if !taken[candidate] {
 			return candidate
 		}
+	}
+}
+
+// runHook runs command via `sh -c`, with CANOPY_WORKTREE_PATH and
+// CANOPY_HOLDER (holder may be "" for a destroy of an idle, unclaimed
+// worktree) set in its environment. Hook failures are non-fatal: canopy
+// reports them as a warning on stderr but does not fail the surrounding
+// claim/destroy operation, since a broken hook (e.g. a typo in
+// config.toml) shouldn't leave a worktree permanently stuck mid-claim or
+// block cleanup — the operation it's attached to has already succeeded
+// by the time the hook runs.
+func runHook(command, path, holder string) {
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Env = append(os.Environ(),
+		"CANOPY_WORKTREE_PATH="+path,
+		"CANOPY_HOLDER="+holder,
+	)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "canopy: warning: hook %q failed: %v: %s\n", command, err, strings.TrimSpace(stderr.String()))
 	}
 }
 
@@ -353,7 +432,7 @@ var ErrLiveClaim = errors.New("canopy: worktree has a live claim; release it fir
 // DestroyResult.Reason, not an error, so callers can decide for
 // themselves whether that should abort (single-path destroy) or just be
 // reported and skipped (--all-idle).
-func destroyChecks(repoRoot, defaultBranch string, wt *state.Worktree, opts DestroyOptions) (*DestroyResult, error) {
+func (p *Pool) destroyChecks(repoRoot, defaultBranch string, wt *state.Worktree, opts DestroyOptions) (*DestroyResult, error) {
 	clean, err := gitutil.IsClean(wt.Path)
 	if err != nil {
 		return nil, fmt.Errorf("checking git status for %s: %w", wt.Path, err)
@@ -376,6 +455,14 @@ func destroyChecks(repoRoot, defaultBranch string, wt *state.Worktree, opts Dest
 			Branch: wt.Branch,
 			Reason: fmt.Sprintf("branch %s is not merged into %s; pass --include-unlanded to destroy anyway", wt.Branch, defaultBranch),
 		}, nil
+	}
+
+	if p.Hooks.PreDestroy != "" {
+		holder := ""
+		if wt.Claim != nil {
+			holder = wt.Claim.Holder
+		}
+		runHook(p.Hooks.PreDestroy, wt.Path, holder)
 	}
 
 	if err := gitutil.WorktreeRemove(repoRoot, wt.Path, !clean); err != nil {
@@ -431,7 +518,7 @@ func (p *Pool) Destroy(path string, opts DestroyOptions) (*DestroyResult, error)
 			return ErrLiveClaim
 		}
 
-		r, err := destroyChecks(p.RepoRoot, defaultBranch, target, opts)
+		r, err := p.destroyChecks(p.RepoRoot, defaultBranch, target, opts)
 		if err != nil {
 			return err
 		}
@@ -474,7 +561,7 @@ func (p *Pool) DestroyAllIdle(opts DestroyOptions) (*DestroyReport, error) {
 				continue
 			}
 
-			r, err := destroyChecks(p.RepoRoot, defaultBranch, wt, opts)
+			r, err := p.destroyChecks(p.RepoRoot, defaultBranch, wt, opts)
 			if err != nil {
 				return err
 			}
