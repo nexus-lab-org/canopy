@@ -506,6 +506,35 @@ func removeWorktree(list []*state.Worktree, target *state.Worktree) []*state.Wor
 	return out
 }
 
+// ResolveWorktreePath validates that the given path is a known worktree
+// in the pool. It performs a read-only lookup of state.json without
+// taking any locks, making it suitable for commands that inspect but do
+// not modify the pool (such as enter). It returns the matching worktree
+// entry or an error if the path is not managed by this pool.
+func (p *Pool) ResolveWorktreePath(path string) (*state.Worktree, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolving path %s: %w", path, err)
+	}
+
+	s, err := state.Load(p.StatePath)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, wt := range s.Worktrees {
+		wtAbs, err := filepath.Abs(wt.Path)
+		if err != nil {
+			return nil, fmt.Errorf("resolving worktree path %s: %w", wt.Path, err)
+		}
+		if wtAbs == absPath {
+			return wt, nil
+		}
+	}
+
+	return nil, fmt.Errorf("canopy: %s is not a worktree canopy manages", path)
+}
+
 // Release returns holder's claimed worktree to the pool. Without force,
 // it refuses when holder has no matching claim, or when the claim's
 // recorded PID is no longer alive (a normal self-release always has a

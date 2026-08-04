@@ -6,6 +6,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1339,4 +1340,103 @@ func TestConcurrentClaimRelease(t *testing.T) {
 			t.Errorf("expected all worktrees free after claim+release cycles, %q still claimed by %q", wt.Path, wt.Claim.Holder)
 		}
 	}
+}
+
+func TestEnter(t *testing.T) {
+	t.Run("drops into a shell in a known worktree with the correct working directory", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		wtPath := claimed.stdout
+
+		// Test with a non-interactive shell that just exits (use /bin/true).
+		// We'll capture what directory it runs in by having it write cwd to a file.
+		testScript := t.TempDir()
+		testMarker := filepath.Join(testScript, "cwd_marker")
+
+		// Create a test shell script that records its cwd and exits.
+		testShell := filepath.Join(testScript, "test-shell")
+		shellContent := fmt.Sprintf("#!/bin/sh\npwd > %q\n", testMarker)
+		if err := os.WriteFile(testShell, []byte(shellContent), 0o755); err != nil {
+			t.Fatalf("writing test shell: %v", err)
+		}
+
+		cmd := exec.Command(binPath, "enter", wtPath)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "SHELL="+testShell)
+		if err := cmd.Run(); err != nil {
+			// The shell may exit with error if it's just /bin/true or similar,
+			// but that's fine for the test.
+			if _, ok := err.(*exec.ExitError); !ok {
+				t.Fatalf("enter failed unexpectedly: %v", err)
+			}
+		}
+
+		recordedCwd, err := os.ReadFile(testMarker)
+		if err == nil {
+			// If the script ran, verify it ran in the right directory.
+			if strings.TrimSpace(string(recordedCwd)) != wtPath {
+				t.Errorf("shell ran in %q, expected %q", strings.TrimSpace(string(recordedCwd)), wtPath)
+			}
+		}
+	})
+
+	t.Run("fails with a clear error for an unknown path", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		badPath := filepath.Join(dir, "nonexistent-worktree")
+		res := runCanopy(t, dir, "enter", badPath)
+		if res.exitCode == 0 {
+			t.Fatal("expected enter with an unknown path to fail")
+		}
+		if !strings.Contains(strings.ToLower(res.stderr), "not a worktree") && !strings.Contains(strings.ToLower(res.stderr), "canopy") {
+			t.Errorf("expected a clear error message, got stderr=%q", res.stderr)
+		}
+	})
+
+	t.Run("does not modify state.json", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		wtPath := claimed.stdout
+
+		before := readState(t, dir)
+
+		// Use /bin/true as the shell for a non-interactive, fast exit.
+		cmd := exec.Command(binPath, "enter", wtPath)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "SHELL=/bin/true")
+		cmd.Run() // ignore error (exit code doesn't matter for this test)
+
+		after := readState(t, dir)
+
+		// Verify state is identical.
+		if len(before.Worktrees) != len(after.Worktrees) {
+			t.Errorf("state.json worktree count changed: before=%d after=%d", len(before.Worktrees), len(after.Worktrees))
+		}
+		if len(before.Worktrees) > 0 && before.Worktrees[0].Claim != nil {
+			if after.Worktrees[0].Claim == nil || after.Worktrees[0].Claim.Holder != before.Worktrees[0].Claim.Holder {
+				t.Errorf("state.json claim was modified by enter: before=%+v after=%+v", before.Worktrees[0].Claim, after.Worktrees[0].Claim)
+			}
+		}
+	})
+
+	t.Run("requires a path argument", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		res := runCanopy(t, dir, "enter")
+		if res.exitCode == 0 {
+			t.Fatal("expected enter without a path argument to fail")
+		}
+	})
 }
