@@ -303,6 +303,209 @@ func uniqueBranch(s *state.State, holder string) string {
 	}
 }
 
+// DestroyOptions controls which of destroy's two independent safety
+// checks are overridden. Both are opt-in and independent of each other
+// by design (see the spec's rationale for splitting them rather than a
+// single blanket --force): accepting "this branch was never merged" and
+// accepting "this has uncommitted changes" are two distinct, deliberate
+// choices.
+type DestroyOptions struct {
+	IncludeUnlanded bool // destroy even if the branch isn't merged into the default branch
+	IncludeDirty    bool // destroy even if the working tree has uncommitted changes
+}
+
+// DestroyResult describes the outcome for one worktree: either
+// destroyed, or left alone with Reason explaining why.
+type DestroyResult struct {
+	Path      string `json:"path"`
+	Branch    string `json:"branch"`
+	Destroyed bool   `json:"destroyed"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// DestroyReport summarizes a DestroyAllIdle call: which unclaimed
+// worktrees were actually destroyed, and which were left alone (and
+// why). Claimed worktrees (live or stale) are excluded entirely — they
+// never appear in either list, since --all-idle only ever considers
+// currently-unclaimed worktrees.
+type DestroyReport struct {
+	Destroyed []*DestroyResult `json:"destroyed"`
+	Skipped   []*DestroyResult `json:"skipped"`
+}
+
+// ErrLiveClaim is returned by Destroy when the target worktree has a
+// claim whose recorded PID is still alive. Destroy never overrides a
+// live claim itself; the operator must release it first (`release
+// --force`, if the claim is otherwise stuck).
+var ErrLiveClaim = errors.New("canopy: worktree has a live claim; release it first (`canopy release --force --holder <holder>`)")
+
+// destroyChecks runs destroy's two independent safety checks (dirty,
+// unmerged) against wt and, if both pass (or are overridden by opts),
+// removes the worktree from disk/git via gitutil.WorktreeRemove. It
+// does not touch s.Worktrees — callers are responsible for removing the
+// entry from the catalog on success. defaultBranch is the branch
+// resolved once per Destroy/DestroyAllIdle call (see
+// gitutil.DefaultBranch).
+//
+// It returns a DestroyResult describing the outcome, or an error only
+// for unexpected failures (git/gitutil errors) — a refused-by-policy
+// outcome (dirty/unmerged without the matching flag) is reported via
+// DestroyResult.Reason, not an error, so callers can decide for
+// themselves whether that should abort (single-path destroy) or just be
+// reported and skipped (--all-idle).
+func destroyChecks(repoRoot, defaultBranch string, wt *state.Worktree, opts DestroyOptions) (*DestroyResult, error) {
+	clean, err := gitutil.IsClean(wt.Path)
+	if err != nil {
+		return nil, fmt.Errorf("checking git status for %s: %w", wt.Path, err)
+	}
+	if !clean && !opts.IncludeDirty {
+		return &DestroyResult{
+			Path:   wt.Path,
+			Branch: wt.Branch,
+			Reason: "working tree has uncommitted changes; pass --include-dirty to destroy anyway",
+		}, nil
+	}
+
+	merged, err := gitutil.IsMerged(repoRoot, wt.Branch, defaultBranch)
+	if err != nil {
+		return nil, fmt.Errorf("checking merge status for branch %s: %w", wt.Branch, err)
+	}
+	if !merged && !opts.IncludeUnlanded {
+		return &DestroyResult{
+			Path:   wt.Path,
+			Branch: wt.Branch,
+			Reason: fmt.Sprintf("branch %s is not merged into %s; pass --include-unlanded to destroy anyway", wt.Branch, defaultBranch),
+		}, nil
+	}
+
+	if err := gitutil.WorktreeRemove(repoRoot, wt.Path, !clean); err != nil {
+		return nil, fmt.Errorf("removing worktree %s: %w", wt.Path, err)
+	}
+
+	return &DestroyResult{Path: wt.Path, Branch: wt.Branch, Destroyed: true}, nil
+}
+
+// Destroy permanently removes the worktree at path from disk and git's
+// worktree registration, and drops its catalog/claim entry from
+// state.json — freeing pool capacity for good, unlike Release/Prune
+// which only ever return a worktree to the pool for reuse.
+//
+// It refuses (returns ErrLiveClaim) if the worktree has a claim whose
+// recorded PID is still alive; a stale claim does not block a
+// directly-named path, since the dead process can no longer be using
+// it, but --all-idle (DestroyAllIdle) is more conservative and skips
+// any claimed worktree, live or stale (see its doc comment).
+//
+// It otherwise refuses an unmerged branch unless opts.IncludeUnlanded,
+// and separately refuses a dirty working tree unless opts.IncludeDirty
+// — both are required together when both conditions apply.
+func (p *Pool) Destroy(path string, opts DestroyOptions) (*DestroyResult, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolving path %s: %w", path, err)
+	}
+
+	defaultBranch, err := gitutil.DefaultBranch(p.RepoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	var result *DestroyResult
+	err = state.WithLock(p.StatePath, func(s *state.State) error {
+		var target *state.Worktree
+		for _, wt := range s.Worktrees {
+			wtAbs, err := filepath.Abs(wt.Path)
+			if err != nil {
+				return fmt.Errorf("resolving worktree path %s: %w", wt.Path, err)
+			}
+			if wtAbs == absPath {
+				target = wt
+				break
+			}
+		}
+		if target == nil {
+			return fmt.Errorf("canopy: %s is not a worktree canopy manages", path)
+		}
+
+		if target.Claim != nil && isAlive(target.Claim.PID) {
+			return ErrLiveClaim
+		}
+
+		r, err := destroyChecks(p.RepoRoot, defaultBranch, target, opts)
+		if err != nil {
+			return err
+		}
+		if !r.Destroyed {
+			return fmt.Errorf("canopy: %s", r.Reason)
+		}
+
+		s.Worktrees = removeWorktree(s.Worktrees, target)
+		result = r
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// DestroyAllIdle applies Destroy's same unmerged/dirty rules across
+// every currently-unclaimed worktree in the pool. Any worktree with a
+// claim — live or stale — is left entirely untouched and does not
+// appear in the report; --all-idle is a bulk-cleanup convenience, not a
+// way to sweep up claimed worktrees a path-by-path destroy would still
+// refuse (live) or allow through (stale) case by case.
+func (p *Pool) DestroyAllIdle(opts DestroyOptions) (*DestroyReport, error) {
+	defaultBranch, err := gitutil.DefaultBranch(p.RepoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	report := &DestroyReport{
+		Destroyed: []*DestroyResult{},
+		Skipped:   []*DestroyResult{},
+	}
+
+	err = state.WithLock(p.StatePath, func(s *state.State) error {
+		remaining := make([]*state.Worktree, 0, len(s.Worktrees))
+		for _, wt := range s.Worktrees {
+			if wt.Claim != nil {
+				remaining = append(remaining, wt)
+				continue
+			}
+
+			r, err := destroyChecks(p.RepoRoot, defaultBranch, wt, opts)
+			if err != nil {
+				return err
+			}
+			if r.Destroyed {
+				report.Destroyed = append(report.Destroyed, r)
+				continue // dropped from the catalog
+			}
+			report.Skipped = append(report.Skipped, r)
+			remaining = append(remaining, wt)
+		}
+		s.Worktrees = remaining
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return report, nil
+}
+
+// removeWorktree returns list with target removed (by pointer
+// identity), preserving order of the rest.
+func removeWorktree(list []*state.Worktree, target *state.Worktree) []*state.Worktree {
+	out := make([]*state.Worktree, 0, len(list)-1)
+	for _, wt := range list {
+		if wt != target {
+			out = append(out, wt)
+		}
+	}
+	return out
+}
+
 // Release returns holder's claimed worktree to the pool. Without force,
 // it refuses when holder has no matching claim, or when the claim's
 // recorded PID is no longer alive (a normal self-release always has a

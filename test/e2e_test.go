@@ -455,6 +455,342 @@ func TestRelease(t *testing.T) {
 	})
 }
 
+// gitIn runs git with args inside dir, failing the test on error, and
+// returns combined output (rarely needed, but useful for debugging a
+// failing assertion).
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v: %s", args, dir, err, out)
+	}
+	return string(out)
+}
+
+// commitFile writes content to name inside dir and commits it on
+// whatever branch dir currently has checked out — used to give a
+// worktree's branch a commit that hasn't landed on the repo's default
+// branch, so destroy's unmerged-branch check has something to refuse.
+func commitFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", name, err)
+	}
+	gitIn(t, dir, "add", name)
+	gitIn(t, dir, "commit", "-q", "-m", "add "+name)
+}
+
+// worktreeExists reports whether git (not just the filesystem) still
+// considers path a registered worktree of the repo at repoDir.
+func worktreeExists(t *testing.T, repoDir, path string) bool {
+	t.Helper()
+	out := gitIn(t, repoDir, "worktree", "list", "--porcelain")
+	return strings.Contains(out, path)
+}
+
+type destroyResult struct {
+	Path      string `json:"path"`
+	Branch    string `json:"branch"`
+	Destroyed bool   `json:"destroyed"`
+	Reason    string `json:"reason"`
+}
+
+type destroyReport struct {
+	Destroyed []destroyResult `json:"destroyed"`
+	Skipped   []destroyResult `json:"skipped"`
+}
+
+func TestDestroy(t *testing.T) {
+	t.Run("removes a clean, merged, unclaimed worktree from disk and git", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		wtPath := claimed.stdout
+		if rel := runCanopy(t, dir, "release", "--holder", "session-a"); rel.exitCode != 0 {
+			t.Fatalf("release failed: %s", rel.stderr)
+		}
+
+		res := runCanopy(t, dir, "destroy", wtPath)
+		if res.exitCode != 0 {
+			t.Fatalf("destroy failed: %s", res.stderr)
+		}
+
+		if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+			t.Errorf("expected worktree directory to be removed, stat err = %v", err)
+		}
+		if worktreeExists(t, dir, wtPath) {
+			t.Errorf("expected worktree to be unregistered from git, still present")
+		}
+		s := readState(t, dir)
+		if len(s.Worktrees) != 0 {
+			t.Errorf("expected worktree removed from state.json catalog, got %d entries", len(s.Worktrees))
+		}
+	})
+
+	t.Run("fails on a nonexistent/unmanaged path", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		res := runCanopy(t, dir, "destroy", filepath.Join(dir, "not-a-worktree"))
+		if res.exitCode == 0 {
+			t.Fatal("expected destroy of an unmanaged path to fail")
+		}
+	})
+
+	t.Run("refuses an unmerged branch unless --include-unlanded is passed", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		wtPath := claimed.stdout
+		commitFile(t, wtPath, "feature.txt", "unmerged work\n")
+		if rel := runCanopy(t, dir, "release", "--holder", "session-a"); rel.exitCode != 0 {
+			t.Fatalf("release failed: %s", rel.stderr)
+		}
+
+		refused := runCanopy(t, dir, "destroy", wtPath)
+		if refused.exitCode == 0 {
+			t.Fatalf("expected destroy of an unmerged branch to fail without --include-unlanded")
+		}
+		if !strings.Contains(strings.ToLower(refused.stderr), "merged") {
+			t.Errorf("expected a clear unmerged-branch error, got stderr=%q", refused.stderr)
+		}
+		if !worktreeExists(t, dir, wtPath) {
+			t.Fatal("worktree should still be registered after a refused destroy")
+		}
+
+		allowed := runCanopy(t, dir, "destroy", wtPath, "--include-unlanded")
+		if allowed.exitCode != 0 {
+			t.Fatalf("expected destroy with --include-unlanded to succeed: %s", allowed.stderr)
+		}
+		if worktreeExists(t, dir, wtPath) {
+			t.Error("expected worktree to be gone after destroy --include-unlanded")
+		}
+	})
+
+	t.Run("refuses a dirty working tree unless --include-dirty is passed", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		wtPath := claimed.stdout
+		if err := os.WriteFile(filepath.Join(wtPath, "scratch.txt"), []byte("dirty\n"), 0o644); err != nil {
+			t.Fatalf("writing scratch file: %v", err)
+		}
+		if rel := runCanopy(t, dir, "release", "--holder", "session-a"); rel.exitCode != 0 {
+			t.Fatalf("release failed: %s", rel.stderr)
+		}
+
+		refused := runCanopy(t, dir, "destroy", wtPath)
+		if refused.exitCode == 0 {
+			t.Fatalf("expected destroy of a dirty worktree to fail without --include-dirty")
+		}
+		if !strings.Contains(strings.ToLower(refused.stderr), "dirty") && !strings.Contains(strings.ToLower(refused.stderr), "uncommitted") {
+			t.Errorf("expected a clear dirty-worktree error, got stderr=%q", refused.stderr)
+		}
+		if !worktreeExists(t, dir, wtPath) {
+			t.Fatal("worktree should still be registered after a refused destroy")
+		}
+
+		allowed := runCanopy(t, dir, "destroy", wtPath, "--include-dirty")
+		if allowed.exitCode != 0 {
+			t.Fatalf("expected destroy with --include-dirty to succeed: %s", allowed.stderr)
+		}
+		if worktreeExists(t, dir, wtPath) {
+			t.Error("expected worktree to be gone after destroy --include-dirty")
+		}
+	})
+
+	t.Run("a worktree that is both unmerged and dirty requires both flags together", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		wtPath := claimed.stdout
+		commitFile(t, wtPath, "feature.txt", "unmerged work\n")
+		if err := os.WriteFile(filepath.Join(wtPath, "scratch.txt"), []byte("dirty\n"), 0o644); err != nil {
+			t.Fatalf("writing scratch file: %v", err)
+		}
+		if rel := runCanopy(t, dir, "release", "--holder", "session-a"); rel.exitCode != 0 {
+			t.Fatalf("release failed: %s", rel.stderr)
+		}
+
+		if res := runCanopy(t, dir, "destroy", wtPath); res.exitCode == 0 {
+			t.Fatal("expected destroy with neither flag to fail")
+		}
+		if res := runCanopy(t, dir, "destroy", wtPath, "--include-unlanded"); res.exitCode == 0 {
+			t.Fatal("expected destroy with only --include-unlanded to fail (still dirty)")
+		}
+		if res := runCanopy(t, dir, "destroy", wtPath, "--include-dirty"); res.exitCode == 0 {
+			t.Fatal("expected destroy with only --include-dirty to fail (still unmerged)")
+		}
+		if !worktreeExists(t, dir, wtPath) {
+			t.Fatal("worktree should still be registered after every refused destroy attempt")
+		}
+
+		res := runCanopy(t, dir, "destroy", wtPath, "--include-unlanded", "--include-dirty")
+		if res.exitCode != 0 {
+			t.Fatalf("expected destroy with both flags to succeed: %s", res.stderr)
+		}
+		if worktreeExists(t, dir, wtPath) {
+			t.Error("expected worktree to be gone after destroy with both flags")
+		}
+	})
+
+	t.Run("refuses a worktree with a live claim, without touching it", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		// Default PID (this test process's parent) stays alive for the
+		// duration of the test, so this claim is live.
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		wtPath := claimed.stdout
+
+		res := runCanopy(t, dir, "destroy", wtPath, "--include-unlanded", "--include-dirty")
+		if res.exitCode == 0 {
+			t.Fatal("expected destroy of a live-claimed worktree to fail")
+		}
+		msg := strings.ToLower(res.stderr)
+		if !strings.Contains(msg, "live claim") && !strings.Contains(msg, "release") {
+			t.Errorf("expected an error pointing at release --force, got stderr=%q", res.stderr)
+		}
+
+		if !worktreeExists(t, dir, wtPath) {
+			t.Fatal("live-claimed worktree should still be registered")
+		}
+		s := readState(t, dir)
+		if s.Worktrees[0].Claim == nil || s.Worktrees[0].Claim.Holder != "session-a" {
+			t.Fatalf("live claim should be untouched, got %+v", s.Worktrees[0].Claim)
+		}
+	})
+
+	t.Run("--all-idle applies the same rules across every unclaimed worktree, leaving claimed ones alone", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		// Claim all four up front (rather than claim-then-release one at a
+		// time) so the pool auto-grows to four distinct worktrees instead
+		// of a release freeing one up for the next claim to reuse.
+		destroyable := runCanopy(t, dir, "claim", "--holder", "destroyable")
+		if destroyable.exitCode != 0 {
+			t.Fatalf("claim failed: %s", destroyable.stderr)
+		}
+		unmerged := runCanopy(t, dir, "claim", "--holder", "unmerged-holder")
+		if unmerged.exitCode != 0 {
+			t.Fatalf("claim failed: %s", unmerged.stderr)
+		}
+		dirty := runCanopy(t, dir, "claim", "--holder", "dirty-holder")
+		if dirty.exitCode != 0 {
+			t.Fatalf("claim failed: %s", dirty.stderr)
+		}
+		// Claimed: live, left alone regardless of clean/merged state.
+		live := runCanopy(t, dir, "claim", "--holder", "live-holder")
+		if live.exitCode != 0 {
+			t.Fatalf("claim failed: %s", live.stderr)
+		}
+
+		commitFile(t, unmerged.stdout, "feature.txt", "unmerged\n")
+		if err := os.WriteFile(filepath.Join(dirty.stdout, "scratch.txt"), []byte("dirty\n"), 0o644); err != nil {
+			t.Fatalf("writing scratch file: %v", err)
+		}
+
+		// destroyable: clean, merged (no new commits), unclaimed.
+		if rel := runCanopy(t, dir, "release", "--holder", "destroyable"); rel.exitCode != 0 {
+			t.Fatalf("release failed: %s", rel.stderr)
+		}
+		// unmerged: clean (committed), unmerged, unclaimed.
+		if rel := runCanopy(t, dir, "release", "--holder", "unmerged-holder"); rel.exitCode != 0 {
+			t.Fatalf("release failed: %s", rel.stderr)
+		}
+		// dirty: merged, dirty (uncommitted), unclaimed.
+		if rel := runCanopy(t, dir, "release", "--holder", "dirty-holder"); rel.exitCode != 0 {
+			t.Fatalf("release failed: %s", rel.stderr)
+		}
+		// live-holder stays claimed with a live PID (this test process's
+		// parent, the default when --pid isn't passed).
+
+		res := runCanopy(t, dir, "destroy", "--all-idle", "--json")
+		if res.exitCode != 0 {
+			t.Fatalf("destroy --all-idle failed: %s", res.stderr)
+		}
+		var report destroyReport
+		if err := json.Unmarshal([]byte(res.stdout), &report); err != nil {
+			t.Fatalf("destroy --all-idle --json output not valid JSON: %v\noutput: %s", err, res.stdout)
+		}
+		if len(report.Destroyed) != 1 || report.Destroyed[0].Path != destroyable.stdout {
+			t.Fatalf("expected exactly the destroyable worktree destroyed, got %+v", report.Destroyed)
+		}
+		if len(report.Skipped) != 2 {
+			t.Fatalf("expected 2 skipped (unmerged + dirty), got %+v", report.Skipped)
+		}
+		skippedPaths := map[string]bool{}
+		for _, e := range report.Skipped {
+			skippedPaths[e.Path] = true
+			if e.Reason == "" {
+				t.Errorf("expected a reason for skipped entry %+v", e)
+			}
+		}
+		if !skippedPaths[unmerged.stdout] || !skippedPaths[dirty.stdout] {
+			t.Errorf("expected unmerged and dirty worktrees both skipped, got %+v", report.Skipped)
+		}
+		// The live-claimed worktree must not appear in the report at all.
+		for _, e := range append(report.Destroyed, report.Skipped...) {
+			if e.Path == live.stdout {
+				t.Errorf("expected the live-claimed worktree to be absent from the report entirely, found %+v", e)
+			}
+		}
+
+		if worktreeExists(t, dir, destroyable.stdout) {
+			t.Error("expected the destroyable worktree to actually be gone from git")
+		}
+		if !worktreeExists(t, dir, unmerged.stdout) || !worktreeExists(t, dir, dirty.stdout) || !worktreeExists(t, dir, live.stdout) {
+			t.Error("expected skipped and claimed worktrees to remain registered")
+		}
+
+		s := readState(t, dir)
+		if len(s.Worktrees) != 3 {
+			t.Fatalf("expected 3 worktrees left in the pool (unmerged, dirty, live), got %d", len(s.Worktrees))
+		}
+
+		// A follow-up run with both override flags should sweep up the
+		// unmerged and dirty ones too, still leaving the live claim alone.
+		res2 := runCanopy(t, dir, "destroy", "--all-idle", "--include-unlanded", "--include-dirty", "--json")
+		if res2.exitCode != 0 {
+			t.Fatalf("destroy --all-idle with both flags failed: %s", res2.stderr)
+		}
+		var report2 destroyReport
+		if err := json.Unmarshal([]byte(res2.stdout), &report2); err != nil {
+			t.Fatalf("destroy --all-idle --json output not valid JSON: %v\noutput: %s", err, res2.stdout)
+		}
+		if len(report2.Destroyed) != 2 || len(report2.Skipped) != 0 {
+			t.Fatalf("expected both remaining idle worktrees destroyed with override flags, got %+v", report2)
+		}
+
+		s2 := readState(t, dir)
+		if len(s2.Worktrees) != 1 || s2.Worktrees[0].Claim == nil || s2.Worktrees[0].Claim.Holder != "live-holder" {
+			t.Fatalf("expected only the live-claimed worktree left in the pool, got %+v", s2.Worktrees)
+		}
+	})
+}
+
 // spawnAndKill starts a short-lived child process, waits for it to
 // exit, and returns its now-dead PID.
 func spawnAndKill(t *testing.T) int {
