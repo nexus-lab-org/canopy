@@ -249,6 +249,101 @@ func TestClaim(t *testing.T) {
 	})
 }
 
+func TestClaimMax(t *testing.T) {
+	t.Run("grows the pool one worktree at a time up to --max, then errors clearly", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		const max = 3
+		for i := 0; i < max; i++ {
+			holder := "holder-" + strconv.Itoa(i)
+			res := runCanopy(t, dir, "claim", "--holder", holder, "--max", strconv.Itoa(max))
+			if res.exitCode != 0 {
+				t.Fatalf("claim %d/%d failed: stderr=%q", i+1, max, res.stderr)
+			}
+		}
+		s := readState(t, dir)
+		if len(s.Worktrees) != max {
+			t.Fatalf("expected pool grown to %d worktrees, got %d", max, len(s.Worktrees))
+		}
+
+		// One more claim, with the pool already at max and nothing free,
+		// must error clearly rather than hang or exceed max.
+		res := runCanopy(t, dir, "claim", "--holder", "one-too-many", "--max", strconv.Itoa(max))
+		if res.exitCode == 0 {
+			t.Fatalf("expected claim beyond --max to fail, got path %q", res.stdout)
+		}
+		msg := strings.ToLower(res.stderr)
+		if !strings.Contains(msg, "exhaust") && !strings.Contains(msg, "max") {
+			t.Errorf("expected a clear pool-exhaustion error, got stderr=%q", res.stderr)
+		}
+
+		after := readState(t, dir)
+		if len(after.Worktrees) != max {
+			t.Fatalf("expected pool to stay at %d worktrees after refused claim, got %d", max, len(after.Worktrees))
+		}
+	})
+
+	t.Run("releasing a worktree after hitting --max allows a subsequent claim to succeed again", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		const max = 2
+		var claims []result
+		for i := 0; i < max; i++ {
+			holder := "holder-" + strconv.Itoa(i)
+			res := runCanopy(t, dir, "claim", "--holder", holder, "--max", strconv.Itoa(max))
+			if res.exitCode != 0 {
+				t.Fatalf("claim %d/%d failed: stderr=%q", i+1, max, res.stderr)
+			}
+			claims = append(claims, res)
+		}
+
+		// Pool is at max; further claim should fail.
+		full := runCanopy(t, dir, "claim", "--holder", "blocked", "--max", strconv.Itoa(max))
+		if full.exitCode == 0 {
+			t.Fatalf("expected claim at max to fail, got path %q", full.stdout)
+		}
+
+		// Release one of the earlier claims.
+		rel := runCanopy(t, dir, "release", "--holder", "holder-0")
+		if rel.exitCode != 0 {
+			t.Fatalf("release failed: stderr=%q", rel.stderr)
+		}
+
+		// A subsequent claim should now succeed, reusing the freed worktree.
+		reclaimed := runCanopy(t, dir, "claim", "--holder", "holder-new", "--max", strconv.Itoa(max))
+		if reclaimed.exitCode != 0 {
+			t.Fatalf("expected claim after release to succeed, got stderr=%q", reclaimed.stderr)
+		}
+		if reclaimed.stdout != claims[0].stdout {
+			t.Errorf("expected reclaim to reuse the freed worktree %q, got %q", claims[0].stdout, reclaimed.stdout)
+		}
+
+		s := readState(t, dir)
+		if len(s.Worktrees) != max {
+			t.Fatalf("expected pool to stay at %d worktrees (reused, not grown), got %d", max, len(s.Worktrees))
+		}
+	})
+
+	t.Run("--max 0 (default) means unlimited: claims keep succeeding", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		for i := 0; i < 4; i++ {
+			holder := "holder-" + strconv.Itoa(i)
+			res := runCanopy(t, dir, "claim", "--holder", holder)
+			if res.exitCode != 0 {
+				t.Fatalf("claim %d without --max failed: stderr=%q", i, res.stderr)
+			}
+		}
+		s := readState(t, dir)
+		if len(s.Worktrees) != 4 {
+			t.Fatalf("expected pool grown to 4 worktrees with no --max set, got %d", len(s.Worktrees))
+		}
+	})
+}
+
 func TestRelease(t *testing.T) {
 	t.Run("frees the holder's worktree back to the pool for a future claim", func(t *testing.T) {
 		dir := newRepo(t)

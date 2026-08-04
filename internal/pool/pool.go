@@ -81,7 +81,10 @@ func sanitize(s string) string {
 
 // Claim hands out a worktree to holder, creating a new one on a fresh
 // branch if none in the pool is currently free, and records the claim.
-func (p *Pool) Claim(holder string, pid int) (*state.Worktree, error) {
+// max caps the total pool size (claimed + idle worktrees); once the pool
+// has max worktrees and none are free, Claim refuses rather than
+// growing further. max <= 0 means unlimited (no cap).
+func (p *Pool) Claim(holder string, pid int, max int) (*state.Worktree, error) {
 	if holder == "" {
 		return nil, errors.New("canopy: --holder is required")
 	}
@@ -101,7 +104,13 @@ func (p *Pool) Claim(holder string, pid int) (*state.Worktree, error) {
 			}
 		}
 
-		// None free: create a new worktree on a fresh branch.
+		// None free: the pool needs to grow. Refuse if that would exceed
+		// the configured max.
+		if max > 0 && len(s.Worktrees) >= max {
+			return fmt.Errorf("canopy: pool exhausted: %d/%d worktrees claimed, max reached", len(s.Worktrees), max)
+		}
+
+		// Create a new worktree on a fresh branch.
 		branch := uniqueBranch(s, holder)
 		name := sanitize(branch)
 		path := filepath.Join(p.BaseDir, name)

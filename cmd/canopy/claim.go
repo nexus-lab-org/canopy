@@ -12,6 +12,7 @@ import (
 func newClaimCmd() *cobra.Command {
 	var holder string
 	var pid int
+	var max int
 
 	cmd := &cobra.Command{
 		Use:   "claim",
@@ -36,7 +37,7 @@ func newClaimCmd() *cobra.Command {
 				effectivePID = os.Getppid()
 			}
 
-			wt, err := p.Claim(holder, effectivePID)
+			wt, err := p.Claim(holder, effectivePID, max)
 			if err != nil {
 				return err
 			}
@@ -47,6 +48,7 @@ func newClaimCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&holder, "holder", "", "identifier for the claiming session/subagent (required)")
 	cmd.Flags().IntVar(&pid, "pid", 0, "PID to associate with this claim (defaults to the parent process's PID)")
+	cmd.Flags().IntVar(&max, "max", 0, "maximum pool size (claimed + idle worktrees) the pool may auto-grow to; 0 means unlimited")
 	cmd.MarkFlagRequired("holder")
 
 	return cmd
