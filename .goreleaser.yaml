@@ -1,0 +1,60 @@
+# GoReleaser config for canopy. See wayfinder/tickets/007-distribution-install-story.md
+# and .context/spec-canopy.md ("Distribution") for the decisions behind this
+# setup: macOS + Linux prebuilt binaries only (no Windows), published to
+# GitHub Releases, tar.gz archives, alongside `go install` as the other
+# supported install path.
+#
+# NOTE: this config has not been run for real (`goreleaser release`) because
+# this repo has no GitHub remote yet. It has been checked for schema/shape
+# correctness against GoReleaser's documented config (v2) but not executed.
+version: 2
+
+project_name: canopy
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: canopy
+    main: ./cmd/canopy
+    binary: canopy
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: canopy
+    ids:
+      - canopy
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: asif
+    name: canopy
