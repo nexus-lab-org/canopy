@@ -195,6 +195,94 @@ func (p *Pool) Status() ([]*WorktreeStatus, error) {
 	return statuses, nil
 }
 
+// PruneEntry describes one claimed worktree that prune considered:
+// either reclaimed (stale claim, clean working tree) or skipped (stale
+// claim, dirty working tree — Reason explains why it was left alone).
+type PruneEntry struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch"`
+	Holder string `json:"holder"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// PruneReport summarizes the outcome of a Prune call: which stale+clean
+// worktrees were returned to the pool, and which stale+dirty ones were
+// left claimed and why. Live claims are never touched and never appear
+// in either list.
+type PruneReport struct {
+	Reclaimed []*PruneEntry `json:"reclaimed"`
+	Skipped   []*PruneEntry `json:"skipped"`
+}
+
+// Prune scans the pool for claims whose recorded PID is no longer alive
+// (per the same isAlive check Status and Release use) and, for each,
+// checks the working tree's cleanliness (via gitutil.IsClean, the same
+// check Status uses). A stale claim on a clean working tree is reclaimed
+// — its claim record is cleared, returning the worktree to the pool for
+// a future Claim, exactly as Release does. A stale claim on a dirty
+// working tree is left untouched and reported as skipped, since
+// uncommitted changes on a dead claim are the signal that distinguishes
+// "finished normally" from "crashed mid-edit" (per the spec's
+// safe-to-reclaim definition). Live claims are never inspected for
+// cleanliness or touched, regardless of what state their working tree
+// is in.
+//
+// includeUnlanded is accepted for CLI-surface parity with destroy, but
+// is currently a no-op: prune's reclaim decision is already
+// clean-vs-dirty only (merged-upstream status is irrelevant, per the
+// spec's safe-to-reclaim definition), and prune never touches disk or
+// branches, so there is no unlanded-branch behavior for this flag to
+// gate here. It's reserved for a possible future stricter default.
+//
+// The whole scan-and-reclaim runs inside a single state.WithLock
+// critical section, so it stays consistent with claim/release's
+// concurrency-safety invariant: no other canopy invocation can observe
+// or race a partially-applied prune.
+func (p *Pool) Prune(includeUnlanded bool) (*PruneReport, error) {
+	report := &PruneReport{
+		Reclaimed: []*PruneEntry{},
+		Skipped:   []*PruneEntry{},
+	}
+
+	err := state.WithLock(p.StatePath, func(s *state.State) error {
+		for _, wt := range s.Worktrees {
+			if wt.Claim == nil {
+				continue // already free; nothing for prune to do
+			}
+			if isAlive(wt.Claim.PID) {
+				continue // live claim: never touched, never reported
+			}
+
+			clean, err := gitutil.IsClean(wt.Path)
+			if err != nil {
+				return fmt.Errorf("checking git status for %s: %w", wt.Path, err)
+			}
+
+			if clean {
+				holder := wt.Claim.Holder
+				wt.Claim = nil
+				report.Reclaimed = append(report.Reclaimed, &PruneEntry{
+					Path:   wt.Path,
+					Branch: wt.Branch,
+					Holder: holder,
+				})
+			} else {
+				report.Skipped = append(report.Skipped, &PruneEntry{
+					Path:   wt.Path,
+					Branch: wt.Branch,
+					Holder: wt.Claim.Holder,
+					Reason: "stale claim but working tree is dirty",
+				})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return report, nil
+}
+
 // uniqueBranch picks "canopy/<holder>", falling back to
 // "canopy/<holder>-2", "-3", ... if that name is already taken by an
 // existing worktree in the pool.

@@ -686,6 +686,224 @@ func TestStatus(t *testing.T) {
 	})
 }
 
+type pruneEntry struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch"`
+	Holder string `json:"holder"`
+	Reason string `json:"reason"`
+}
+
+type pruneReport struct {
+	Reclaimed []pruneEntry `json:"reclaimed"`
+	Skipped   []pruneEntry `json:"skipped"`
+}
+
+func TestPrune(t *testing.T) {
+	t.Run("a stale claim with a clean working tree is reclaimed and claimable afterward", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		deadPID := spawnAndKill(t)
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a", "--pid", strconv.Itoa(deadPID))
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+
+		res := runCanopy(t, dir, "prune", "--json")
+		if res.exitCode != 0 {
+			t.Fatalf("prune failed: %s", res.stderr)
+		}
+		var report pruneReport
+		if err := json.Unmarshal([]byte(res.stdout), &report); err != nil {
+			t.Fatalf("prune --json output not valid JSON: %v\noutput: %s", err, res.stdout)
+		}
+		if len(report.Reclaimed) != 1 || report.Reclaimed[0].Holder != "session-a" {
+			t.Fatalf("expected session-a's worktree to be reclaimed, got %+v", report)
+		}
+		if len(report.Skipped) != 0 {
+			t.Fatalf("expected nothing skipped, got %+v", report.Skipped)
+		}
+
+		s := readState(t, dir)
+		if len(s.Worktrees) != 1 {
+			t.Fatalf("expected the worktree to remain in the pool, got %d", len(s.Worktrees))
+		}
+		if s.Worktrees[0].Claim != nil {
+			t.Fatalf("expected claim cleared after prune, got %+v", s.Worktrees[0].Claim)
+		}
+
+		// The reclaimed worktree should now be claimable by someone else.
+		reclaimed := runCanopy(t, dir, "claim", "--holder", "session-b")
+		if reclaimed.exitCode != 0 {
+			t.Fatalf("claim after prune failed: %s", reclaimed.stderr)
+		}
+		if reclaimed.stdout != claimed.stdout {
+			t.Errorf("expected re-claim to reuse the pruned worktree %q, got %q", claimed.stdout, reclaimed.stdout)
+		}
+		s2 := readState(t, dir)
+		if len(s2.Worktrees) != 1 {
+			t.Errorf("expected pool to stay at 1 worktree (reused, not grown), got %d", len(s2.Worktrees))
+		}
+	})
+
+	t.Run("a stale claim with a dirty working tree is left claimed and reported as skipped", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		deadPID := spawnAndKill(t)
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a", "--pid", strconv.Itoa(deadPID))
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		wtPath := claimed.stdout
+		if err := os.WriteFile(filepath.Join(wtPath, "scratch.txt"), []byte("dirty\n"), 0o644); err != nil {
+			t.Fatalf("writing scratch file: %v", err)
+		}
+
+		res := runCanopy(t, dir, "prune", "--json")
+		if res.exitCode != 0 {
+			t.Fatalf("prune failed: %s", res.stderr)
+		}
+		var report pruneReport
+		if err := json.Unmarshal([]byte(res.stdout), &report); err != nil {
+			t.Fatalf("prune --json output not valid JSON: %v\noutput: %s", err, res.stdout)
+		}
+		if len(report.Reclaimed) != 0 {
+			t.Fatalf("expected nothing reclaimed, got %+v", report.Reclaimed)
+		}
+		if len(report.Skipped) != 1 || report.Skipped[0].Holder != "session-a" || report.Skipped[0].Reason == "" {
+			t.Fatalf("expected session-a's worktree to be reported skipped with a reason, got %+v", report)
+		}
+
+		s := readState(t, dir)
+		if s.Worktrees[0].Claim == nil || s.Worktrees[0].Claim.Holder != "session-a" {
+			t.Fatalf("expected stale-but-dirty claim to remain untouched, got %+v", s.Worktrees[0].Claim)
+		}
+	})
+
+	t.Run("a live claim is never touched by prune, regardless of clean/dirty state", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		// Default PID (this test process's parent) stays alive for the
+		// duration of the test, so this claim is live.
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a")
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		wtPath := claimed.stdout
+		if err := os.WriteFile(filepath.Join(wtPath, "scratch.txt"), []byte("dirty\n"), 0o644); err != nil {
+			t.Fatalf("writing scratch file: %v", err)
+		}
+
+		res := runCanopy(t, dir, "prune", "--json")
+		if res.exitCode != 0 {
+			t.Fatalf("prune failed: %s", res.stderr)
+		}
+		var report pruneReport
+		if err := json.Unmarshal([]byte(res.stdout), &report); err != nil {
+			t.Fatalf("prune --json output not valid JSON: %v\noutput: %s", err, res.stdout)
+		}
+		if len(report.Reclaimed) != 0 || len(report.Skipped) != 0 {
+			t.Fatalf("expected a live claim to be neither reclaimed nor skipped, got %+v", report)
+		}
+
+		s := readState(t, dir)
+		if s.Worktrees[0].Claim == nil || s.Worktrees[0].Claim.Holder != "session-a" {
+			t.Fatalf("expected live claim to remain untouched, got %+v", s.Worktrees[0].Claim)
+		}
+	})
+
+	t.Run("never deletes a worktree directory or its git worktree registration", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		deadPID := spawnAndKill(t)
+		claimed := runCanopy(t, dir, "claim", "--holder", "session-a", "--pid", strconv.Itoa(deadPID))
+		if claimed.exitCode != 0 {
+			t.Fatalf("claim failed: %s", claimed.stderr)
+		}
+		wtPath := claimed.stdout
+
+		res := runCanopy(t, dir, "prune")
+		if res.exitCode != 0 {
+			t.Fatalf("prune failed: %s", res.stderr)
+		}
+
+		if fi, err := os.Stat(wtPath); err != nil || !fi.IsDir() {
+			t.Fatalf("expected worktree directory to still exist after prune: %v", err)
+		}
+
+		out, err := exec.Command("git", "-C", dir, "worktree", "list", "--porcelain").CombinedOutput()
+		if err != nil {
+			t.Fatalf("git worktree list failed: %v: %s", err, out)
+		}
+		if !strings.Contains(string(out), wtPath) {
+			t.Errorf("expected pruned worktree to remain registered in git, got:\n%s", out)
+		}
+	})
+
+	t.Run("--json output parses and reflects reclaimed vs skipped for a mixed pool", func(t *testing.T) {
+		dir := newRepo(t)
+		runCanopy(t, dir, "init")
+
+		// Stale + clean: reclaimable.
+		deadPID1 := spawnAndKill(t)
+		reclaimable := runCanopy(t, dir, "claim", "--holder", "reclaim-me", "--pid", strconv.Itoa(deadPID1))
+		if reclaimable.exitCode != 0 {
+			t.Fatalf("claim failed: %s", reclaimable.stderr)
+		}
+
+		// Stale + dirty: skip.
+		deadPID2 := spawnAndKill(t)
+		skippable := runCanopy(t, dir, "claim", "--holder", "skip-me", "--pid", strconv.Itoa(deadPID2))
+		if skippable.exitCode != 0 {
+			t.Fatalf("claim failed: %s", skippable.stderr)
+		}
+		if err := os.WriteFile(filepath.Join(skippable.stdout, "scratch.txt"), []byte("dirty\n"), 0o644); err != nil {
+			t.Fatalf("writing scratch file: %v", err)
+		}
+
+		// Live: untouched.
+		live := runCanopy(t, dir, "claim", "--holder", "leave-me")
+		if live.exitCode != 0 {
+			t.Fatalf("claim failed: %s", live.stderr)
+		}
+
+		res := runCanopy(t, dir, "prune", "--json")
+		if res.exitCode != 0 {
+			t.Fatalf("prune failed: %s", res.stderr)
+		}
+		var report pruneReport
+		if err := json.Unmarshal([]byte(res.stdout), &report); err != nil {
+			t.Fatalf("prune --json output not valid JSON: %v\noutput: %s", err, res.stdout)
+		}
+		if len(report.Reclaimed) != 1 || report.Reclaimed[0].Holder != "reclaim-me" {
+			t.Fatalf("expected exactly reclaim-me reclaimed, got %+v", report.Reclaimed)
+		}
+		if len(report.Skipped) != 1 || report.Skipped[0].Holder != "skip-me" {
+			t.Fatalf("expected exactly skip-me skipped, got %+v", report.Skipped)
+		}
+
+		s := readState(t, dir)
+		holderClaims := map[string]bool{}
+		for _, wt := range s.Worktrees {
+			if wt.Claim != nil {
+				holderClaims[wt.Claim.Holder] = true
+			}
+		}
+		if holderClaims["reclaim-me"] {
+			t.Errorf("expected reclaim-me's claim cleared, still present in state")
+		}
+		if !holderClaims["skip-me"] {
+			t.Errorf("expected skip-me's claim to remain, missing from state")
+		}
+		if !holderClaims["leave-me"] {
+			t.Errorf("expected leave-me's (live) claim to remain, missing from state")
+		}
+	})
+}
+
 func TestConcurrentClaims(t *testing.T) {
 	dir := newRepo(t)
 	runCanopy(t, dir, "init")
