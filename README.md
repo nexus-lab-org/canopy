@@ -4,7 +4,9 @@
 `init` a pool in a repo, `claim`/`release` worktrees on behalf of agent
 sessions (wired into Claude Code and Codex lifecycle hooks), and inspect
 or clean up the pool with `status`, `prune`, and `destroy`. See
-[`.context/spec-canopy.md`](.context/spec-canopy.md) for the full design.
+[`.context/spec-canopy.md`](.context/spec-canopy.md) for the full design,
+or the project site at
+[nexus-lab-org.github.io/canopy](https://nexus-lab-org.github.io/canopy).
 
 ## Installation
 
@@ -40,6 +42,30 @@ script prints the `export PATH=...` line to add.
 
 Prebuilt binaries are built via the [`goreleaser`](https://goreleaser.com)
 pipeline configured in [`.goreleaser.yaml`](.goreleaser.yaml).
+
+## Agent hooks setup
+
+Claim and release can be wired into Claude Code's and Codex's session
+lifecycle hooks, so a worktree is claimed when an agent session starts
+and released when it stops — no manual `claim`/`release` calls. One
+command wires both:
+
+```sh
+git clone https://github.com/nexus-lab-org/canopy.git
+cd canopy
+./hooks/install.sh              # wires both Claude Code and Codex
+./hooks/install.sh --claude     # Claude Code only
+./hooks/install.sh --codex      # Codex only
+./hooks/install.sh --uninstall  # remove canopy's entries again
+```
+
+This edits your **user-level** hook config (`~/.claude/settings.json`,
+`~/.codex/hooks.json`) — never a project-level one, so opening an
+untrusted repo can never smuggle in its own hook commands. The installer
+is idempotent (safe to re-run) and leaves any unrelated hooks in those
+files untouched. See [`hooks/README.md`](hooks/README.md) for the full
+payload-field reference, the crash/never-configured fallback, and why
+user-level wiring matters.
 
 ## Verifying an install
 

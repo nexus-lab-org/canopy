@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="canopy - a pool of git worktrees for agentic coding sessions">
+    <meta name="keywords" content="git, worktree, cli, claude code, codex, agents, go">
+    <title>canopy - Git Worktrees for Agent Sessions</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #2E8B57;
+            --secondary: #1B3B2F;
+            --accent: #A8D5BA;
+            --dark: #14201A;
+            --light: #f5f5f5;
+            --gray: #666;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #f5f7fa 0%, #d9e8de 100%);
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        header {
+            background: linear-gradient(135deg, var(--secondary) 0%, var(--dark) 100%);
+            color: white;
+            padding: 80px 20px;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+
+        header h1 {
+            font-size: 3.5rem;
+            margin-bottom: 10px;
+            font-weight: 700;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        header p {
+            font-size: 1.3rem;
+            color: #e0e0e0;
+            margin-bottom: 30px;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            font-size: 1rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #257048;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 15px rgba(46, 139, 87, 0.3);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: white;
+            border: 2px solid white;
+        }
+
+        .btn-secondary:hover {
+            background: white;
+            color: var(--secondary);
+            transform: translateY(-2px);
+        }
+
+        section {
+            background: white;
+            margin: 40px auto;
+            padding: 60px 40px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            max-width: 1000px;
+        }
+
+        h2 {
+            font-size: 2.2rem;
+            color: var(--secondary);
+            margin-bottom: 30px;
+            border-bottom: 3px solid var(--primary);
+            padding-bottom: 15px;
+        }
+
+        h3 {
+            font-size: 1.5rem;
+            color: var(--secondary);
+            margin-top: 25px;
+            margin-bottom: 15px;
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            margin-top: 40px;
+        }
+
+        .feature-card {
+            padding: 25px;
+            border-left: 4px solid var(--primary);
+            background: linear-gradient(135deg, #f9f9f9 0%, #f0f0f0 100%);
+            border-radius: 6px;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+        }
+
+        .feature-card h3 {
+            margin-top: 0;
+            color: var(--secondary);
+        }
+
+        .feature-card p {
+            color: var(--gray);
+            line-height: 1.8;
+        }
+
+        code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+            color: var(--secondary);
+        }
+
+        pre {
+            background: #14201A;
+            color: #f8f8f2;
+            padding: 20px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            margin: 20px 0;
+        }
+
+        pre code {
+            background: none;
+            color: inherit;
+            padding: 0;
+        }
+
+        .usage-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 0.95rem;
+        }
+
+        .usage-table th {
+            background: var(--secondary);
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        .usage-table td {
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .usage-table tr:hover {
+            background: #f9f9f9;
+        }
+
+        .installation-steps {
+            counter-reset: step-counter;
+            list-style: none;
+        }
+
+        .installation-steps li {
+            counter-increment: step-counter;
+            margin-bottom: 20px;
+            padding-left: 40px;
+            position: relative;
+        }
+
+        .installation-steps li::before {
+            content: counter(step-counter);
+            position: absolute;
+            left: 0;
+            top: 0;
+            background: var(--primary);
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+        }
+
+        footer {
+            background: var(--dark);
+            color: white;
+            text-align: center;
+            padding: 30px;
+            margin-top: 60px;
+        }
+
+        footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 0;
+            border-bottom: 2px solid #eee;
+        }
+
+        .tab-btn {
+            background: none;
+            border: none;
+            padding: 10px 18px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--gray);
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+        }
+
+        .tab-btn.active {
+            color: var(--secondary);
+            border-bottom-color: var(--primary);
+        }
+
+        .tab-panel {
+            display: none;
+            padding-top: 20px;
+        }
+
+        .tab-panel.active {
+            display: block;
+        }
+
+        @media (max-width: 768px) {
+            header h1 {
+                font-size: 2.5rem;
+            }
+
+            header p {
+                font-size: 1.1rem;
+            }
+
+            section {
+                padding: 40px 20px;
+            }
+
+            h2 {
+                font-size: 1.8rem;
+            }
+
+            .cta-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .btn {
+                width: 100%;
+                max-width: 300px;
+            }
+        }
+
+        .highlight {
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .example-box {
+            background: #f9f9f9;
+            border-left: 4px solid var(--secondary);
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 6px;
+        }
+
+        .example-box strong {
+            color: var(--secondary);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>🌳 canopy</h1>
+            <p>A pool of git worktrees for agentic coding sessions</p>
+            <div class="cta-buttons">
+                <a href="#installation" class="btn btn-primary">Get Started</a>
+                <a href="https://github.com/nexus-lab-org/canopy" class="btn btn-secondary">View on GitHub</a>
+            </div>
+        </div>
+    </header>
+
+    <section id="about">
+        <div class="container">
+            <h2>About canopy</h2>
+            <p><code>canopy</code> manages a <span class="highlight">pool of git worktrees</span> so agent sessions — Claude Code, Codex, or anything else you point it at — each get their own isolated checkout instead of colliding in one working tree.</p>
+            <p style="margin-top: 20px;">A single locked <code>state.json</code> tracks who holds each worktree, whether that holder is still alive, and whether the worktree is clean. Claiming, releasing, pruning stale sessions, and destroying worktrees for good are all first-class commands — and lifecycle hooks can wire claim/release straight into a session's start and stop, with no manual steps.</p>
+        </div>
+    </section>
+
+    <section id="features">
+        <div class="container">
+            <h2>Key Features</h2>
+            <div class="features">
+                <div class="feature-card">
+                    <h3>🌲 Worktree Pool</h3>
+                    <p>Reuses idle worktrees or grows a new one on demand, up to a configurable max — no more manually juggling <code>git worktree add</code> for every parallel session.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🔒 Locked, Durable State</h3>
+                    <p>A single flock-protected <code>state.json</code> tracks every claim, so concurrent sessions never race each other for the same worktree.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>💓 Live/Stale Detection</h3>
+                    <p>Every claim records its holder's PID. If that process dies without releasing, canopy knows — and <code>prune</code> reclaims it automatically once it's clean.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🪝 Agent Lifecycle Hooks</h3>
+                    <p>Ships with Claude Code and Codex hook scripts (plus a one-command installer) that claim on session start and release on session stop — no manual bookkeeping.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🧹 Safe Cleanup</h3>
+                    <p><code>prune</code> reclaims stale-and-clean worktrees back to the pool; <code>destroy</code> permanently removes one, gated behind explicit flags for unmerged branches or uncommitted changes.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🐚 Manual Drop-In</h3>
+                    <p><code>canopy enter &lt;path&gt;</code> drops a shell straight into any worktree for hands-on inspection, without touching its claim.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="installation">
+        <div class="container">
+            <h2>Installation</h2>
+            <p>Two supported install paths: <code>go install</code> for anyone with a Go toolchain, or a curl-to-install script for everyone else. Linux and macOS, amd64 and arm64 — no Windows.</p>
+
+            <h3>Option 1: go install</h3>
+            <pre><code>go install github.com/nexus-lab-org/canopy/cmd/canopy@latest</code></pre>
+            <p style="margin-top: 10px;">Installs a <code>canopy</code> binary to <code>$(go env GOPATH)/bin</code> (typically <code>~/go/bin</code>) — make sure it's on your <code>PATH</code>.</p>
+
+            <h3>Option 2: curl-to-install script</h3>
+            <pre><code>curl -fsSL https://raw.githubusercontent.com/nexus-lab-org/canopy/main/install.sh | sh</code></pre>
+            <p style="margin-top: 10px;">Downloads the prebuilt binary matching your OS/architecture from the latest <a href="https://github.com/nexus-lab-org/canopy/releases">GitHub Release</a> and installs it to <code>/usr/local/bin</code> (if writable) or <code>~/.local/bin</code>.</p>
+
+            <div class="example-box">
+                <strong>Verification:</strong><br>
+                <code>canopy init</code> inside a git repo, then <code>canopy claim --holder my-session</code> and <code>canopy status</code>.
+            </div>
+        </div>
+    </section>
+
+    <section id="hooks">
+        <div class="container">
+            <h2>Agent Hooks Setup</h2>
+            <p>canopy ships hook scripts that claim a worktree when an agent session starts and release it when the session stops, so you never run <code>claim</code>/<code>release</code> by hand. Wire them up with one command:</p>
+
+            <pre><code>git clone https://github.com/nexus-lab-org/canopy.git
+cd canopy
+./hooks/install.sh</code></pre>
+
+            <p style="margin-top: 10px;">This edits your <strong>user-level</strong> hook config — never a project-level one, so a cloned repo can never smuggle in its own hook commands just by being opened.</p>
+
+            <div class="tabs">
+                <button class="tab-btn active" data-tab="both">Both</button>
+                <button class="tab-btn" data-tab="claude">Claude Code only</button>
+                <button class="tab-btn" data-tab="codex">Codex only</button>
+            </div>
+            <div class="tab-panel active" data-panel="both">
+                <pre><code>./hooks/install.sh</code></pre>
+                <p>Wires <code>~/.claude/settings.json</code> and <code>~/.codex/hooks.json</code> (<code>$CODEX_HOME/hooks.json</code>) in one pass.</p>
+            </div>
+            <div class="tab-panel" data-panel="claude">
+                <pre><code>./hooks/install.sh --claude</code></pre>
+                <p>Wires <code>SessionStart</code>/<code>SubagentStart</code> to <code>claim.sh</code> and <code>Stop</code>/<code>SubagentStop</code> to <code>release.sh</code> in <code>~/.claude/settings.json</code> only.</p>
+            </div>
+            <div class="tab-panel" data-panel="codex">
+                <pre><code>./hooks/install.sh --codex</code></pre>
+                <p>Same wiring, in <code>~/.codex/hooks.json</code> only. Confirm your installed Codex version supports <code>hooks.json</code> first.</p>
+            </div>
+
+            <p style="margin-top: 20px;">The installer is idempotent — safe to re-run — and reversible:</p>
+            <pre><code>./hooks/install.sh --uninstall</code></pre>
+
+            <div class="example-box">
+                <strong>Crash fallback:</strong><br>
+                If a session crashes and its <code>Stop</code> hook never fires, the claim isn't lost forever: canopy tracks the holder's PID, so <code>canopy status</code> reports it <code>stale</code> once that process dies, and <code>canopy prune</code> reclaims it automatically if the worktree is clean.
+            </div>
+
+            <p style="margin-top: 20px;">See <a href="https://github.com/nexus-lab-org/canopy/blob/main/hooks/README.md">hooks/README.md</a> for the full payload-field reference and why user-level wiring matters.</p>
+        </div>
+    </section>
+
+    <section id="usage">
+        <div class="container">
+            <h2>Usage</h2>
+            <h3>Commands</h3>
+            <table class="usage-table">
+                <thead>
+                    <tr>
+                        <th>Command</th>
+                        <th>What it does</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>canopy init</code></td>
+                        <td>Sets up the worktree pool for the current repo</td>
+                    </tr>
+                    <tr>
+                        <td><code>canopy claim --holder &lt;id&gt;</code></td>
+                        <td>Hands you an idle worktree, or grows a new one, up to <code>--max</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>canopy release --holder &lt;id&gt;</code></td>
+                        <td>Frees a worktree back to the pool (<code>--force</code> if the holder looks dead)</td>
+                    </tr>
+                    <tr>
+                        <td><code>canopy status</code></td>
+                        <td>Lists every worktree with its holder, live/stale, and clean/dirty state (<code>--json</code> available)</td>
+                    </tr>
+                    <tr>
+                        <td><code>canopy prune</code></td>
+                        <td>Reclaims stale-and-clean worktrees back to the idle pool</td>
+                    </tr>
+                    <tr>
+                        <td><code>canopy destroy &lt;path&gt;</code></td>
+                        <td>Permanently removes a worktree (<code>--include-unlanded</code>/<code>--include-dirty</code> to override safety checks, <code>--all-idle</code> for bulk)</td>
+                    </tr>
+                    <tr>
+                        <td><code>canopy enter &lt;path&gt;</code></td>
+                        <td>Drops a shell into a worktree for manual inspection, without touching its claim</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Quick Example</h3>
+            <div class="example-box">
+                <strong>Claim, work, release:</strong><br>
+                <code>canopy claim --holder my-session</code> → work in the printed path → <code>canopy release --holder my-session</code>
+            </div>
+        </div>
+    </section>
+
+    <section id="license">
+        <div class="container">
+            <h2>License</h2>
+            <p><a href="https://github.com/nexus-lab-org/canopy/blob/main/LICENSE">View the full license</a> on GitHub.</p>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2026 canopy. Built by the NexusLab community.</p>
+            <p style="margin-top: 15px; color: #999; font-size: 0.9rem;">
+                <a href="https://github.com/nexus-lab-org/canopy">GitHub Repository</a> •
+                <a href="https://github.com/nexus-lab-org/canopy/releases">Releases</a> •
+                <a href="https://github.com/nexus-lab-org/canopy/issues">Report Issues</a>
+            </p>
+        </div>
+    </footer>
+
+    <script>
+        document.querySelectorAll('.tab-btn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var tab = btn.getAttribute('data-tab');
+                document.querySelectorAll('.tab-btn').forEach(function (b) { b.classList.remove('active'); });
+                document.querySelectorAll('.tab-panel').forEach(function (p) { p.classList.remove('active'); });
+                btn.classList.add('active');
+                document.querySelector('.tab-panel[data-panel="' + tab + '"]').classList.add('active');
+            });
+        });
+    </script>
+</body>
+</html>
