@@ -88,3 +88,7 @@ Distribution-specific tests live in `test/install_test.go` (the
 `go build`/`go install` paths, run through an init/claim/status smoke
 test) and `test/install_script_test.sh` (unit tests for `install.sh`'s
 OS/arch detection and download-URL construction, with `uname` stubbed).
+
+## License
+
+[GPL-3.0](LICENSE).
