@@ -98,16 +98,16 @@ assert_eq "asset name: darwin/arm64/v1.2.3" \
 	"$(canopy_asset_name darwin arm64 v1.2.3)"
 
 assert_eq "download URL: linux/amd64" \
-	"https://github.com/asif/canopy/releases/download/v1.2.3/canopy_v1.2.3_linux_amd64.tar.gz" \
-	"$(canopy_download_url asif/canopy v1.2.3 linux amd64)"
+	"https://github.com/nexus-lab-org/canopy/releases/download/v1.2.3/canopy_v1.2.3_linux_amd64.tar.gz" \
+	"$(canopy_download_url nexus-lab-org/canopy v1.2.3 linux amd64)"
 
 assert_eq "download URL: darwin/arm64" \
-	"https://github.com/asif/canopy/releases/download/v1.2.3/canopy_v1.2.3_darwin_arm64.tar.gz" \
-	"$(canopy_download_url asif/canopy v1.2.3 darwin arm64)"
+	"https://github.com/nexus-lab-org/canopy/releases/download/v1.2.3/canopy_v1.2.3_darwin_arm64.tar.gz" \
+	"$(canopy_download_url nexus-lab-org/canopy v1.2.3 darwin arm64)"
 
 assert_eq "download URL: darwin/amd64" \
-	"https://github.com/asif/canopy/releases/download/v0.9.0/canopy_v0.9.0_darwin_amd64.tar.gz" \
-	"$(canopy_download_url asif/canopy v0.9.0 darwin amd64)"
+	"https://github.com/nexus-lab-org/canopy/releases/download/v0.9.0/canopy_v0.9.0_darwin_amd64.tar.gz" \
+	"$(canopy_download_url nexus-lab-org/canopy v0.9.0 darwin amd64)"
 
 # --- Install dir resolution honors an explicit override ---
 

@@ -17,7 +17,7 @@ for now.
 ### Option 1: `go install` (requires a Go toolchain)
 
 ```sh
-go install github.com/asif/canopy/cmd/canopy@latest
+go install github.com/nexus-lab-org/canopy/cmd/canopy@latest
 ```
 
 This installs a `canopy` binary to `$(go env GOPATH)/bin` (typically
@@ -28,11 +28,11 @@ module root.
 ### Option 2: curl-to-install script (no Go toolchain required)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/asif/canopy/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/nexus-lab-org/canopy/main/install.sh | sh
 ```
 
 This downloads the prebuilt `canopy` binary matching your OS/architecture
-from the latest [GitHub Release](https://github.com/asif/canopy/releases)
+from the latest [GitHub Release](https://github.com/nexus-lab-org/canopy/releases)
 and installs it to `/usr/local/bin` (if writable) or `~/.local/bin`
 otherwise. Supported platforms: Linux and macOS, amd64 and arm64 (no
 Windows). If the install directory isn't already on your `PATH`, the

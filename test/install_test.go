@@ -103,7 +103,7 @@ func TestGoBuildSmokeTest(t *testing.T) {
 // TestGoInstallSmokeTest verifies the actual `go install` code path (as
 // opposed to `go build`, which TestGoBuildSmokeTest already covers): it
 // runs `go install ./cmd/canopy` — the module-relative form, which is the
-// closest local approximation to `go install github.com/asif/canopy/cmd/canopy@latest`
+// closest local approximation to `go install github.com/nexus-lab-org/canopy/cmd/canopy@latest`
 // available without a real GitHub remote to install from — into a scratch
 // GOPATH/bin, then runs the resulting binary through the same smoke test.
 //

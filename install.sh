@@ -1,15 +1,15 @@
 #!/usr/bin/env sh
 # install.sh — curl-to-install script for canopy.
 #
-#   curl -fsSL https://raw.githubusercontent.com/asif/canopy/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/nexus-lab-org/canopy/main/install.sh | sh
 #
 # Downloads the prebuilt canopy binary matching the running OS/arch from the
-# latest GitHub Release of asif/canopy (built via .goreleaser.yaml at the
+# latest GitHub Release of nexus-lab-org/canopy (built via .goreleaser.yaml at the
 # repo root: linux/darwin, amd64/arm64, tar.gz archives) and installs it
 # somewhere on PATH.
 #
 # This is the fallback install path for machines without a Go toolchain;
-# `go install github.com/asif/canopy/cmd/canopy@latest` is the other
+# `go install github.com/nexus-lab-org/canopy/cmd/canopy@latest` is the other
 # supported path (see README.md).
 #
 # NOTE: as of writing there is no GitHub remote or release for this repo
@@ -21,7 +21,7 @@
 
 set -eu
 
-REPO="${CANOPY_INSTALL_REPO:-asif/canopy}"
+REPO="${CANOPY_INSTALL_REPO:-nexus-lab-org/canopy}"
 VERSION="${CANOPY_INSTALL_VERSION:-latest}"
 BIN_NAME="canopy"
 

@@ -1,4 +1,4 @@
-module github.com/asif/canopy
+module github.com/nexus-lab-org/canopy
 
 go 1.25.6
 

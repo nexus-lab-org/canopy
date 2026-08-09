@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/asif/canopy/internal/config"
-	"github.com/asif/canopy/internal/gitutil"
-	"github.com/asif/canopy/internal/state"
+	"github.com/nexus-lab-org/canopy/internal/config"
+	"github.com/nexus-lab-org/canopy/internal/gitutil"
+	"github.com/nexus-lab-org/canopy/internal/state"
 )
 
 // defaultBranchNaming is the branch-name template used when neither

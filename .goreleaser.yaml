@@ -56,5 +56,5 @@ changelog:
 
 release:
   github:
-    owner: asif
+    owner: nexus-lab-org
     name: canopy

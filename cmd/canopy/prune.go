@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/asif/canopy/internal/pool"
+	"github.com/nexus-lab-org/canopy/internal/pool"
 )
 
 func newPruneCmd() *cobra.Command {
