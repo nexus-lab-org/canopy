@@ -47,8 +47,8 @@ pipeline configured in [`.goreleaser.yaml`](.goreleaser.yaml).
 
 Claim and release can be wired into Claude Code's and Codex's session
 lifecycle hooks, so a worktree is claimed when an agent session starts
-and released when it stops — no manual `claim`/`release` calls. One
-command wires both:
+and released when it stops — no manual `claim`/`release` calls. Requires
+[`jq`](https://jqlang.org/download/) on `PATH`. One command wires both:
 
 ```sh
 git clone https://github.com/nexus-lab-org/canopy.git

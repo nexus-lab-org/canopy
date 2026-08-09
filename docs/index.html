@@ -402,7 +402,7 @@
     <section id="hooks">
         <div class="container">
             <h2>Agent Hooks Setup</h2>
-            <p>canopy ships hook scripts that claim a worktree when an agent session starts and release it when the session stops, so you never run <code>claim</code>/<code>release</code> by hand. Wire them up with one command:</p>
+            <p>canopy ships hook scripts that claim a worktree when an agent session starts and release it when the session stops, so you never run <code>claim</code>/<code>release</code> by hand. Requires <a href="https://jqlang.org/download/"><code>jq</code></a> on <code>PATH</code>. Wire them up with one command:</p>
 
             <pre><code>git clone https://github.com/nexus-lab-org/canopy.git
 cd canopy
