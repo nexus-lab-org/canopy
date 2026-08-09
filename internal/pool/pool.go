@@ -5,6 +5,8 @@
 package pool
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -79,13 +81,23 @@ func Open(dir string) (*Pool, error) {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
 
-	// Default worktree base directory: a sibling of the repo root, named
-	// "<repo>-canopy-worktrees". config.toml's worktree_base_dir
-	// overrides this.
-	base := filepath.Join(filepath.Dir(toplevel), filepath.Base(toplevel)+"-canopy-worktrees")
-	if cfg.WorktreeBaseDir != "" {
-		base = cfg.WorktreeBaseDir
+	// Default worktree base directory: a single common root under
+	// $XDG_DATA_HOME (or ~/.local/share), not a sibling of the repo root
+	// — worktrees are real uncommitted state, not disposable cache, and a
+	// common root avoids scattering worktree dirs across the filesystem.
+	// config.toml's worktree_base_dir relocates the root, but every
+	// repo's worktrees — default or configured root alike — always land
+	// under a <repo-basename>-<hash> subdirectory so that repos sharing a
+	// basename (e.g. two different "canopy" clones) never collide. See
+	// wayfinder/tickets/009-default-worktree-base-dir.md.
+	root, err := defaultWorktreeRoot()
+	if err != nil {
+		return nil, fmt.Errorf("resolving default worktree base directory: %w", err)
 	}
+	if cfg.WorktreeBaseDir != "" {
+		root = cfg.WorktreeBaseDir
+	}
+	base := filepath.Join(root, repoSubdir(toplevel))
 
 	branchNaming := defaultBranchNaming
 	if cfg.BranchNaming != "" {
@@ -107,6 +119,30 @@ func Open(dir string) (*Pool, error) {
 func (p *Pool) Init() error {
 	_, err := state.Init(p.GitCommonDir)
 	return err
+}
+
+// defaultWorktreeRoot resolves the unconfigured default worktree base
+// directory's root: $XDG_DATA_HOME/canopy/worktrees, falling back to
+// ~/.local/share/canopy/worktrees when XDG_DATA_HOME is unset.
+func defaultWorktreeRoot() (string, error) {
+	dataHome := os.Getenv("XDG_DATA_HOME")
+	if dataHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolving home directory: %w", err)
+		}
+		dataHome = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(dataHome, "canopy", "worktrees"), nil
+}
+
+// repoSubdir returns the per-repo subdirectory worktrees for the repo at
+// toplevel are created under: the repo's basename plus a short hash of
+// its absolute path, so that repos sharing a basename (e.g. two
+// different "canopy" clones) never collide under a shared root.
+func repoSubdir(toplevel string) string {
+	sum := sha256.Sum256([]byte(toplevel))
+	return filepath.Base(toplevel) + "-" + hex.EncodeToString(sum[:])[:8]
 }
 
 var branchSanitizer = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
