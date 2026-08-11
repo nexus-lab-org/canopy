@@ -175,24 +175,88 @@ func TestConfigWorktreeBaseDir(t *testing.T) {
 		if !strings.HasPrefix(res.stdout, base) {
 			t.Errorf("expected worktree path under configured base dir %q, got %q", base, res.stdout)
 		}
+		// The override relocates the root, but a <repo-basename>-<hash>
+		// subdirectory must still land directly underneath it.
+		repoDir := filepath.Dir(filepath.Dir(res.stdout))
+		if repoDir != base {
+			t.Errorf("expected a per-repo subdirectory directly under configured base dir %q, got worktree at %q", base, res.stdout)
+		}
+		wantPrefix := filepath.Base(dir) + "-"
+		if got := filepath.Base(filepath.Dir(res.stdout)); !strings.HasPrefix(got, wantPrefix) {
+			t.Errorf("expected per-repo subdirectory to start with %q, got %q", wantPrefix, got)
+		}
 		if _, err := os.Stat(res.stdout); err != nil {
 			t.Errorf("worktree not created at reported path: %v", err)
 		}
 	})
 
-	t.Run("default worktree location is unchanged when no config.toml is present", func(t *testing.T) {
+	t.Run("default worktree location is under XDG_DATA_HOME/canopy/worktrees when no config.toml is present", func(t *testing.T) {
 		dir := newRepo(t)
 		home := isolatedHome(t)
-		runCanopyEnv(t, dir, []string{"HOME=" + home}, "init")
+		env := []string{"HOME=" + home, "XDG_DATA_HOME="}
+		runCanopyEnv(t, dir, env, "init")
 
-		res := runCanopyEnv(t, dir, []string{"HOME=" + home}, "claim", "--holder", "dave")
+		res := runCanopyEnv(t, dir, env, "claim", "--holder", "dave")
 		if res.exitCode != 0 {
 			t.Fatalf("claim failed: stderr=%q", res.stderr)
 		}
 
-		wantDir := filepath.Dir(dir)
+		wantDir := filepath.Join(home, ".local", "share", "canopy", "worktrees")
 		if !strings.HasPrefix(res.stdout, wantDir) {
-			t.Errorf("expected default sibling worktree dir under %q, got %q", wantDir, res.stdout)
+			t.Errorf("expected default worktree dir under %q, got %q", wantDir, res.stdout)
+		}
+	})
+
+	t.Run("default worktree location respects XDG_DATA_HOME when set", func(t *testing.T) {
+		dir := newRepo(t)
+		home := isolatedHome(t)
+		dataHome := filepath.Join(home, "xdg-data")
+		env := []string{"HOME=" + home, "XDG_DATA_HOME=" + dataHome}
+		runCanopyEnv(t, dir, env, "init")
+
+		res := runCanopyEnv(t, dir, env, "claim", "--holder", "eve")
+		if res.exitCode != 0 {
+			t.Fatalf("claim failed: stderr=%q", res.stderr)
+		}
+
+		wantDir := filepath.Join(dataHome, "canopy", "worktrees")
+		if !strings.HasPrefix(res.stdout, wantDir) {
+			t.Errorf("expected worktree dir under XDG_DATA_HOME-derived path %q, got %q", wantDir, res.stdout)
+		}
+	})
+
+	t.Run("two repos with the same basename get non-colliding default worktree dirs", func(t *testing.T) {
+		home := isolatedHome(t)
+		env := []string{"HOME=" + home, "XDG_DATA_HOME="}
+
+		// newRepo already created its own temp dir; move each repo under
+		// a name we control so both are literally named "canopy".
+		parentA := t.TempDir()
+		dirA := filepath.Join(parentA, "canopy")
+		if err := os.Rename(newRepo(t), dirA); err != nil {
+			t.Fatalf("renaming repo A into place: %v", err)
+		}
+
+		parentB := t.TempDir()
+		dirB := filepath.Join(parentB, "canopy")
+		if err := os.Rename(newRepo(t), dirB); err != nil {
+			t.Fatalf("renaming repo B into place: %v", err)
+		}
+
+		runCanopyEnv(t, dirA, env, "init")
+		runCanopyEnv(t, dirB, env, "init")
+
+		resA := runCanopyEnv(t, dirA, env, "claim", "--holder", "same-name-a")
+		if resA.exitCode != 0 {
+			t.Fatalf("claim in repo A failed: stderr=%q", resA.stderr)
+		}
+		resB := runCanopyEnv(t, dirB, env, "claim", "--holder", "same-name-b")
+		if resB.exitCode != 0 {
+			t.Fatalf("claim in repo B failed: stderr=%q", resB.stderr)
+		}
+
+		if filepath.Dir(resA.stdout) == filepath.Dir(resB.stdout) {
+			t.Errorf("expected repos A and B (both named %q) to get different worktree subdirectories, both got %q", "canopy", filepath.Dir(resA.stdout))
 		}
 	})
 }
