@@ -67,6 +67,28 @@ files untouched. See [`hooks/README.md`](hooks/README.md) for the full
 payload-field reference, the crash/never-configured fallback, and why
 user-level wiring matters.
 
+## Agent skill
+
+This repo ships a [`canopy` skill](.claude/skills/canopy/SKILL.md) that
+teaches a coding agent how to install canopy, wire its hooks, and drive
+`init`/`status`/`prune`/`destroy` on its own — hand an agent the repo
+and it can set canopy up for you instead of you running the commands
+above by hand. It's a standard [Agent Skill](https://skills.sh) (a
+`SKILL.md` under `.claude/skills/`), so it installs with the
+[`skills` CLI](https://github.com/vercel-labs/skills) like any other:
+
+```sh
+npx skills add nexus-lab-org/canopy --skill canopy
+```
+
+This copies the skill into whichever coding agents you have installed
+(Claude Code, Codex, Cursor, and 70+ others — see `npx skills add
+--help` for the full list), after which asking your agent to "set up
+canopy in this repo" or "install canopy" is enough for it to run the
+skill. See [the blog post](docs/blog/agent-skill.md) for a ready-to-paste
+prompt if you'd rather skip the CLI and just point an agent at this repo
+directly.
+
 ## Verifying an install
 
 ```sh
