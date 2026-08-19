@@ -11,13 +11,6 @@
 # This is the fallback install path for machines without a Go toolchain;
 # `go install github.com/nexus-lab-org/canopy/cmd/canopy@latest` is the other
 # supported path (see README.md).
-#
-# NOTE: as of writing there is no GitHub remote or release for this repo
-# yet, so the actual download from GITHUB_RELEASE_URL below cannot be
-# exercised end-to-end. The OS/arch detection and URL-construction logic
-# is unit-testable in isolation (see test/install_script_test.sh) and is
-# written so the only thing that changes once a real release exists is
-# the REPO variable / an actual network reaching GitHub.
 
 set -eu
 
@@ -78,7 +71,12 @@ canopy_download_url() {
 	os="$3"
 	arch="$4"
 
-	asset="$(canopy_asset_name "$os" "$arch" "$version")"
+	# The release tag keeps its "v" prefix (e.g. "v1.2.3"), but goreleaser's
+	# {{ .Version }} archive name_template strips it (e.g. "canopy_1.2.3_..."),
+	# so the asset filename needs the prefix stripped even though the URL
+	# path segment for the tag itself does not.
+	asset_version="${version#v}"
+	asset="$(canopy_asset_name "$os" "$arch" "$asset_version")"
 	echo "https://github.com/${repo}/releases/download/${version}/${asset}"
 }
 

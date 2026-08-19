@@ -3,10 +3,6 @@
 # setup: macOS + Linux prebuilt binaries only (no Windows), published to
 # GitHub Releases, tar.gz archives, alongside `go install` as the other
 # supported install path.
-#
-# NOTE: this config has not been run for real (`goreleaser release`) because
-# this repo has no GitHub remote yet. It has been checked for schema/shape
-# correctness against GoReleaser's documented config (v2) but not executed.
 version: 2
 
 project_name: canopy
