@@ -1,6 +1,6 @@
 ---
 name: canopy
-description: Install, configure, and operate canopy — the git-worktree pool manager for agentic coding sessions. Use when the user wants to set up canopy in a repo, wire its session-lifecycle hooks (Claude Code and/or Codex, the only two canopy currently supports), check/inspect worktree pool state (status/prune/destroy), or troubleshoot claim/release/hook behavior. Also use if canopy commands are missing or failing and need installing/reinstalling. Tool-agnostic: every step is a plain shell command, so this skill works the same regardless of which coding agent is running it.
+description: "Install, configure, and operate canopy — the git-worktree pool manager for agentic coding sessions. Use when the user wants to set up canopy in a repo, wire its session-lifecycle hooks (Claude Code and/or Codex, the only two canopy currently supports), check/inspect worktree pool state (status/prune/destroy), or troubleshoot claim/release/hook behavior. Also use if canopy commands are missing or failing and need installing/reinstalling. Tool-agnostic: every step is a plain shell command, so this skill works the same regardless of which coding agent is running it."
 ---
 
 # canopy

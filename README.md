@@ -43,38 +43,19 @@ script prints the `export PATH=...` line to add.
 Prebuilt binaries are built via the [`goreleaser`](https://goreleaser.com)
 pipeline configured in [`.goreleaser.yaml`](.goreleaser.yaml).
 
-## Agent hooks setup
+## Agent skill setup
 
 Claim and release can be wired into Claude Code's and Codex's session
 lifecycle hooks, so a worktree is claimed when an agent session starts
-and released when it stops — no manual `claim`/`release` calls. Requires
-[`jq`](https://jqlang.org/download/) on `PATH`. One command wires both:
+and released when it stops — no manual `claim`/`release` calls. The
+easiest way to get this (and the rest of canopy) set up is to hand a
+coding agent the [`canopy` skill](.claude/skills/canopy/SKILL.md)
+instead of running the install/hook commands by hand: it teaches the
+agent how to install canopy, wire its hooks, and drive
+`init`/`status`/`prune`/`destroy` on its own.
 
-```sh
-git clone https://github.com/nexus-lab-org/canopy.git
-cd canopy
-./hooks/install.sh              # wires both Claude Code and Codex
-./hooks/install.sh --claude     # Claude Code only
-./hooks/install.sh --codex      # Codex only
-./hooks/install.sh --uninstall  # remove canopy's entries again
-```
-
-This edits your **user-level** hook config (`~/.claude/settings.json`,
-`~/.codex/hooks.json`) — never a project-level one, so opening an
-untrusted repo can never smuggle in its own hook commands. The installer
-is idempotent (safe to re-run) and leaves any unrelated hooks in those
-files untouched. See [`hooks/README.md`](hooks/README.md) for the full
-payload-field reference, the crash/never-configured fallback, and why
-user-level wiring matters.
-
-## Agent skill
-
-This repo ships a [`canopy` skill](.claude/skills/canopy/SKILL.md) that
-teaches a coding agent how to install canopy, wire its hooks, and drive
-`init`/`status`/`prune`/`destroy` on its own — hand an agent the repo
-and it can set canopy up for you instead of you running the commands
-above by hand. It's a standard [Agent Skill](https://skills.sh) (a
-`SKILL.md` under `.claude/skills/`), so it installs with the
+It's a standard [Agent Skill](https://skills.sh) (a `SKILL.md` under
+`.claude/skills/`), so it installs with the
 [`skills` CLI](https://github.com/vercel-labs/skills) like any other:
 
 ```sh
@@ -85,9 +66,16 @@ This copies the skill into whichever coding agents you have installed
 (Claude Code, Codex, Cursor, and 70+ others — see `npx skills add
 --help` for the full list), after which asking your agent to "set up
 canopy in this repo" or "install canopy" is enough for it to run the
-skill. See [the blog post](docs/blog/agent-skill.md) for a ready-to-paste
-prompt if you'd rather skip the CLI and just point an agent at this repo
-directly.
+skill — including wiring the hooks, which requires
+[`jq`](https://jqlang.org/download/) on `PATH` and edits your
+**user-level** hook config (`~/.claude/settings.json`,
+`~/.codex/hooks.json`) via `./hooks/install.sh`, never a project-level
+one, so opening an untrusted repo can never smuggle in its own hook
+commands. See [`hooks/README.md`](hooks/README.md) for the full
+payload-field reference, the crash/never-configured fallback, and why
+user-level wiring matters, and [the blog post](docs/blog/agent-skill.md)
+for a ready-to-paste prompt if you'd rather skip the CLI and just point
+an agent at this repo directly.
 
 ## Verifying an install
 

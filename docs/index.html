@@ -248,39 +248,6 @@
             text-decoration: underline;
         }
 
-        .tabs {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 0;
-            border-bottom: 2px solid #eee;
-        }
-
-        .tab-btn {
-            background: none;
-            border: none;
-            padding: 10px 18px;
-            font-size: 0.95rem;
-            font-weight: 600;
-            color: var(--gray);
-            cursor: pointer;
-            border-bottom: 3px solid transparent;
-            margin-bottom: -2px;
-        }
-
-        .tab-btn.active {
-            color: var(--secondary);
-            border-bottom-color: var(--primary);
-        }
-
-        .tab-panel {
-            display: none;
-            padding-top: 20px;
-        }
-
-        .tab-panel.active {
-            display: block;
-        }
-
         @media (max-width: 768px) {
             header h1 {
                 font-size: 2.5rem;
@@ -399,44 +366,23 @@
         </div>
     </section>
 
-    <section id="hooks">
+    <section id="skill">
         <div class="container">
-            <h2>Agent Hooks Setup</h2>
-            <p>canopy ships hook scripts that claim a worktree when an agent session starts and release it when the session stops, so you never run <code>claim</code>/<code>release</code> by hand. Requires <a href="https://jqlang.org/download/"><code>jq</code></a> on <code>PATH</code>. Wire them up with one command:</p>
+            <h2>Agent Skill Setup</h2>
+            <p>canopy ships hook scripts that claim a worktree when an agent session starts and release it when the session stops, so you never run <code>claim</code>/<code>release</code> by hand. The easiest way to get this (and the rest of canopy) set up is to hand a coding agent the <a href="https://github.com/nexus-lab-org/canopy/blob/main/.claude/skills/canopy/SKILL.md"><code>canopy</code> skill</a> instead of running the install/hook commands yourself — it walks the agent through installing canopy, wiring the hooks, and driving <code>init</code>/<code>status</code>/<code>prune</code>/<code>destroy</code> on its own.</p>
 
-            <pre><code>git clone https://github.com/nexus-lab-org/canopy.git
-cd canopy
-./hooks/install.sh</code></pre>
+            <p style="margin-top: 10px;">It's a standard <a href="https://skills.sh">Agent Skill</a>, so it installs with the <a href="https://github.com/vercel-labs/skills"><code>skills</code> CLI</a> like any other:</p>
 
-            <p style="margin-top: 10px;">This edits your <strong>user-level</strong> hook config — never a project-level one, so a cloned repo can never smuggle in its own hook commands just by being opened.</p>
+            <pre><code>npx skills add nexus-lab-org/canopy --skill canopy</code></pre>
 
-            <div class="tabs">
-                <button class="tab-btn active" data-tab="both">Both</button>
-                <button class="tab-btn" data-tab="claude">Claude Code only</button>
-                <button class="tab-btn" data-tab="codex">Codex only</button>
-            </div>
-            <div class="tab-panel active" data-panel="both">
-                <pre><code>./hooks/install.sh</code></pre>
-                <p>Wires <code>~/.claude/settings.json</code> and <code>~/.codex/hooks.json</code> (<code>$CODEX_HOME/hooks.json</code>) in one pass.</p>
-            </div>
-            <div class="tab-panel" data-panel="claude">
-                <pre><code>./hooks/install.sh --claude</code></pre>
-                <p>Wires <code>SessionStart</code>/<code>SubagentStart</code> to <code>claim.sh</code> and <code>Stop</code>/<code>SubagentStop</code> to <code>release.sh</code> in <code>~/.claude/settings.json</code> only.</p>
-            </div>
-            <div class="tab-panel" data-panel="codex">
-                <pre><code>./hooks/install.sh --codex</code></pre>
-                <p>Same wiring, in <code>~/.codex/hooks.json</code> only. Confirm your installed Codex version supports <code>hooks.json</code> first.</p>
-            </div>
-
-            <p style="margin-top: 20px;">The installer is idempotent — safe to re-run — and reversible:</p>
-            <pre><code>./hooks/install.sh --uninstall</code></pre>
+            <p style="margin-top: 10px;">This copies the skill into whichever coding agents you have installed (Claude Code, Codex, Cursor, and 70+ others — see <code>npx skills add --help</code> for the full list). After that, asking your agent to "set up canopy in this repo" or "install canopy" is enough for it to run the skill — including wiring the hooks, which requires <a href="https://jqlang.org/download/"><code>jq</code></a> on <code>PATH</code> and edits your <strong>user-level</strong> hook config (<code>~/.claude/settings.json</code>, <code>~/.codex/hooks.json</code>) via <code>./hooks/install.sh</code>, never a project-level one, so opening an untrusted repo can never smuggle in its own hook commands.</p>
 
             <div class="example-box">
                 <strong>Crash fallback:</strong><br>
                 If a session crashes and its <code>Stop</code> hook never fires, the claim isn't lost forever: canopy tracks the holder's PID, so <code>canopy status</code> reports it <code>stale</code> once that process dies, and <code>canopy prune</code> reclaims it automatically if the worktree is clean.
             </div>
 
-            <p style="margin-top: 20px;">See <a href="https://github.com/nexus-lab-org/canopy/blob/main/hooks/README.md">hooks/README.md</a> for the full payload-field reference and why user-level wiring matters.</p>
+            <p style="margin-top: 20px;">Prefer not to install anything first? See <a href="https://github.com/nexus-lab-org/canopy/blob/main/docs/blog/agent-skill.md">the blog post</a> for a ready-to-paste prompt that points any repo-aware agent at this repo directly, or <a href="https://github.com/nexus-lab-org/canopy/blob/main/hooks/README.md">hooks/README.md</a> for the manual hook-install path and full payload-field reference.</p>
         </div>
     </section>
 
@@ -509,16 +455,5 @@ cd canopy
         </div>
     </footer>
 
-    <script>
-        document.querySelectorAll('.tab-btn').forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                var tab = btn.getAttribute('data-tab');
-                document.querySelectorAll('.tab-btn').forEach(function (b) { b.classList.remove('active'); });
-                document.querySelectorAll('.tab-panel').forEach(function (p) { p.classList.remove('active'); });
-                btn.classList.add('active');
-                document.querySelector('.tab-panel[data-panel="' + tab + '"]').classList.add('active');
-            });
-        });
-    </script>
 </body>
 </html>
